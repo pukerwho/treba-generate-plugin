@@ -164,7 +164,8 @@ final class Treba_Generate_Content_Plugin
         $current_tab = isset($_GET['tab'])
             ? sanitize_key(wp_unslash($_GET['tab']))
             : 'generator';
-        $can_manage = current_user_can('manage_options');
+        $can_manage_templates = $this->can_manage_templates();
+        $can_manage_settings = current_user_can('manage_options');
 
         echo '<div class="wrap treba-generate-content">';
         echo '<h1>' .
@@ -181,7 +182,7 @@ final class Treba_Generate_Content_Plugin
             'generator' === $current_tab ? 'nav-tab-active' : '',
             esc_html__('Генератор контенту', 'treba-generate-content')
         );
-        if ($can_manage) {
+        if ($can_manage_templates) {
             printf(
                 '<a href="%s" class="nav-tab %s">%s</a>',
                 esc_url(
@@ -192,6 +193,8 @@ final class Treba_Generate_Content_Plugin
                 'templates' === $current_tab ? 'nav-tab-active' : '',
                 esc_html__('Шаблони', 'treba-generate-content')
             );
+        }
+        if ($can_manage_settings) {
             printf(
                 '<a href="%s" class="nav-tab %s">%s</a>',
                 esc_url(
@@ -205,9 +208,9 @@ final class Treba_Generate_Content_Plugin
         }
         echo '</h2>';
 
-        if ('templates' === $current_tab && $can_manage) {
+        if ('templates' === $current_tab && $can_manage_templates) {
             $this->render_templates_form();
-        } elseif ('settings' === $current_tab && $can_manage) {
+        } elseif ('settings' === $current_tab && $can_manage_settings) {
             $this->render_settings_form();
         } else {
             $this->render_generator_form();
@@ -541,7 +544,7 @@ final class Treba_Generate_Content_Plugin
 
     private function render_templates_form()
     {
-        if (!current_user_can('manage_options')) {
+        if (!$this->can_manage_templates()) {
             return;
         }
 
@@ -844,7 +847,7 @@ final class Treba_Generate_Content_Plugin
 
     private function handle_settings_save()
     {
-        if (!current_user_can('manage_options')) {
+        if (!$this->can_manage_templates()) {
             return;
         }
 
@@ -906,7 +909,7 @@ final class Treba_Generate_Content_Plugin
 
     private function handle_template_save()
     {
-        if (!current_user_can('manage_options')) {
+        if (!$this->can_manage_templates()) {
             return;
         }
 
@@ -1000,7 +1003,7 @@ final class Treba_Generate_Content_Plugin
 
     private function handle_template_delete()
     {
-        if (!current_user_can('manage_options')) {
+        if (!$this->can_manage_templates()) {
             return;
         }
 
@@ -1032,7 +1035,7 @@ final class Treba_Generate_Content_Plugin
 
     private function handle_templates_export()
     {
-        if (!current_user_can('manage_options')) {
+        if (!$this->can_manage_templates()) {
             return;
         }
 
@@ -1650,6 +1653,11 @@ final class Treba_Generate_Content_Plugin
             0,
             16
         );
+    }
+
+    private function can_manage_templates()
+    {
+        return $this->is_user_allowed();
     }
 
     private function is_user_allowed()
