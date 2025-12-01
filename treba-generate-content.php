@@ -1078,7 +1078,7 @@ final class Treba_Generate_Content_Plugin
 
     private function handle_templates_import()
     {
-        if (!current_user_can('manage_options')) {
+        if (!$this->can_manage_templates()) {
             return;
         }
 
