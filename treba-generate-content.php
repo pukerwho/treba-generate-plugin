@@ -1645,17 +1645,19 @@ final class Treba_Generate_Content_Plugin
         ];
 
         $url = 'https://api.openai.com/v1/chat/completions';
+        $timeout = 60;
 
         if ($use_openrouter) {
             $url = 'https://openrouter.ai/api/v1/chat/completions';
             $headers['HTTP-Referer'] = home_url('/');
             $headers['X-Title'] = get_bloginfo('name', 'raw');
+            $timeout = 120; // OpenRouter може відповідати повільніше
         }
 
         $response = wp_remote_post($url, [
             'headers' => $headers,
             'body' => wp_json_encode($payload),
-            'timeout' => 60,
+            'timeout' => $timeout,
         ]);
 
         if (is_wp_error($response)) {
