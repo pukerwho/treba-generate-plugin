@@ -1504,6 +1504,26 @@ final class Treba_Generate_Content_Plugin
 
     private function request_openai($api_key, $model, $prompt)
     {
+        $payload = [
+            'model' => $model,
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' =>
+                        'You are a helpful assistant that writes well-structured long-form SEO articles.',
+                ],
+                [
+                    'role' => 'user',
+                    'content' => $prompt,
+                ],
+            ],
+        ];
+
+        // Деякі моделі (наприклад, search-preview) не приймають temperature.
+        if ('gpt-4o-mini-search-preview' !== $model) {
+            $payload['temperature'] = 0.65;
+        }
+
         $response = wp_remote_post(
             'https://api.openai.com/v1/chat/completions',
             [
@@ -1511,21 +1531,7 @@ final class Treba_Generate_Content_Plugin
                     'Content-Type' => 'application/json',
                     'Authorization' => 'Bearer ' . $api_key,
                 ],
-                'body' => wp_json_encode([
-                    'model' => $model,
-                    'messages' => [
-                        [
-                            'role' => 'system',
-                            'content' =>
-                                'You are a helpful assistant that writes well-structured long-form SEO articles.',
-                        ],
-                        [
-                            'role' => 'user',
-                            'content' => $prompt,
-                        ],
-                    ],
-                    'temperature' => 0.65,
-                ]),
+                'body' => wp_json_encode($payload),
                 'timeout' => 60,
             ]
         );
