@@ -1501,13 +1501,15 @@ final class Treba_Generate_Content_Plugin
         }
 
         $temperature = $this->get_temperature();
+        $max_tokens = $this->calculate_max_tokens($word_goal);
 
         $content = $this->request_openai(
             $api_key,
             $model,
             $prompt,
             $is_openrouter,
-            $temperature
+            $temperature,
+            $max_tokens
         );
 
         if (empty($content)) {
@@ -1617,7 +1619,8 @@ final class Treba_Generate_Content_Plugin
         $model,
         $prompt,
         $use_openrouter = false,
-        $temperature = 0.65
+        $temperature = 0.65,
+        $max_tokens = null
     ) {
         $payload = [
             'model' => $model,
@@ -1639,6 +1642,10 @@ final class Treba_Generate_Content_Plugin
             $payload['temperature'] = $temperature;
         }
 
+        if (null !== $max_tokens) {
+            $payload['max_tokens'] = $max_tokens;
+        }
+
         $headers = [
             'Content-Type' => 'application/json',
             'Authorization' => 'Bearer ' . $api_key,
@@ -1651,7 +1658,7 @@ final class Treba_Generate_Content_Plugin
             $url = 'https://openrouter.ai/api/v1/chat/completions';
             $headers['HTTP-Referer'] = home_url('/');
             $headers['X-Title'] = get_bloginfo('name', 'raw');
-            $timeout = 120; // OpenRouter може відповідати повільніше
+            $timeout = 180; // OpenRouter може відповідати повільніше
         }
 
         $response = wp_remote_post($url, [
@@ -1742,6 +1749,27 @@ final class Treba_Generate_Content_Plugin
         }
 
         return $value;
+    }
+
+    private function calculate_max_tokens($word_goal)
+    {
+        $goal = is_numeric($word_goal) ? (int) $word_goal : 0;
+
+        if ($goal <= 0) {
+            return 4096;
+        }
+
+        // Приблизно 1 слово ≈ 1.3–1.6 токена, беремо верхню межу.
+        $estimated = (int) round($goal * 1.6);
+
+        // Обмежуємо, щоб уникати дуже довгих відповідей, які спричиняють тайм-аути.
+        if ($estimated < 512) {
+            $estimated = 512;
+        } elseif ($estimated > 8192) {
+            $estimated = 8192;
+        }
+
+        return $estimated;
     }
 
     private function is_openrouter_model($model)
