@@ -18,7 +18,9 @@ final class Treba_Generate_Content_Plugin
 {
     private $allowed_users_option = 'treba_gpt_allowed_users';
     private $api_key_option = 'treba_gpt_api_key';
+    private $openrouter_api_key_option = 'treba_openrouter_api_key';
     private $default_model_option = 'treba_gpt_default_model';
+    private $temperature_option = 'treba_gpt_temperature';
     private $notices = [];
     private $errors = [];
     private $reset_form = false;
@@ -26,6 +28,7 @@ final class Treba_Generate_Content_Plugin
     private $templates_option = 'treba_gpt_templates';
     private $markdown_parser;
     private $cached_api_key = null;
+    private $cached_openrouter_api_key = null;
     private $encryption_key = null;
     private $models = [
         'gpt-4o-mini' => 'GPT-4o mini (швидко та дешево)',
@@ -33,6 +36,35 @@ final class Treba_Generate_Content_Plugin
             'GPT-4o mini search preview (пошук, превʼю)',
         'gpt-4o' => 'GPT-4o (висока якість)',
         'gpt-4.1-mini' => 'GPT-4.1 mini (довші відповіді)',
+        'openrouter/auto' => 'OpenRouter Auto (розумний роутинг)',
+        'openai/gpt-4o' => 'OpenRouter · OpenAI GPT-4o',
+        'openai/gpt-4o-mini' => 'OpenRouter · OpenAI GPT-4o mini',
+        'openai/gpt-4.1' => 'OpenRouter · OpenAI GPT-4.1',
+        'openai/gpt-4.1-mini' => 'OpenRouter · OpenAI GPT-4.1 mini',
+        'anthropic/claude-3.5-sonnet' => 'OpenRouter · Claude 3.5 Sonnet',
+        'anthropic/claude-3.5-haiku' => 'OpenRouter · Claude 3.5 Haiku',
+        'meta-llama/llama-3.1-8b-instruct' =>
+            'OpenRouter · Llama 3.1 8B Instruct',
+        'meta-llama/llama-3.1-70b-instruct' =>
+            'OpenRouter · Llama 3.1 70B Instruct',
+        'mistralai/mixtral-8x7b-instruct' =>
+            'OpenRouter · Mixtral 8x7B Instruct',
+        'mistralai/mixtral-8x22b-instruct' =>
+            'OpenRouter · Mixtral 8x22B Instruct',
+        'qwen/qwen-2-72b-instruct' => 'OpenRouter · Qwen2 72B Instruct',
+        'qwen/qwen-2-7b-instruct' => 'OpenRouter · Qwen2 7B Instruct',
+        'nvidia/nemotron-3-nano-30b-a3b:free' =>
+            'OpenRouter · Nemotron 3 Nano 30B (free)',
+        'mistralai/devstral-2512:free' => 'OpenRouter · DevStral 2512 (free)',
+        'x-ai/grok-code-fast-1' => 'OpenRouter · Grok Code Fast 1',
+        'x-ai/grok-4-fast' => 'OpenRouter · Grok 4 Fast',
+        'google/gemini-2.5-flash' => 'OpenRouter · Gemini 2.5 Flash',
+        'google/gemini-2.0-flash-001' => 'OpenRouter · Gemini 2.0 Flash 001',
+        'deepseek/deepseek-v3.2' => 'OpenRouter · DeepSeek V3.2',
+        'deepseek/deepseek-chat-v3-0324' =>
+            'OpenRouter · DeepSeek Chat V3 0324',
+        'kwaipilot/kat-coder-pro:free' => 'OpenRouter · KAT Coder Pro (free)',
+        'qwen/qwen3-235b-a22b-2507' => 'OpenRouter · Qwen3 235B A22B (2507)',
     ];
 
     public function __construct()
@@ -313,11 +345,12 @@ final class Treba_Generate_Content_Plugin
             $selected_post_type,
             'category'
         );
-        $supports_tags = is_object_in_taxonomy($selected_post_type, 'post_tag');
         $categories = $supports_categories
             ? get_categories(['hide_empty' => false])
             : [];
-        $api_key_available = $this->has_api_key();
+        $has_any_api_key = $this->has_any_api_key();
+        $has_openai_key = $this->has_api_key();
+        $has_openrouter_key = $this->has_openrouter_api_key();
         $default_template_key = $this->get_default_template_key();
 
         if ('' === $default_template_key) {
@@ -350,52 +383,68 @@ final class Treba_Generate_Content_Plugin
 
 			<table class="form-table" role="presentation">
 				<tbody>
-					<?php if (!$api_key_available): ?>
+					<?php if (!$has_any_api_key): ?>
 						<tr>
-							<th scope="row"><?php esc_html_e(
-           'Ключ OpenAI API',
-           'treba-generate-content'
-       ); ?></th>
+							<th scope="row"><?php esc_html_e('Ключ API', 'treba-generate-content'); ?></th>
 							<td>
 								<div class="notice notice-warning inline">
 									<p>
-										<?php if (current_user_can('manage_options')) {
+										<?php
+          $settings_url = esc_url(
+              admin_url('admin.php?page=treba-generate-content&tab=settings')
+          );
+
+          if (current_user_can('manage_options')) {
               printf(
                   '%s <a href="%s">%s</a>',
                   esc_html__(
-                      'Ключ ще не налаштований. Додайте його у вкладці «Налаштування».',
+                      'Жоден ключ API (OpenAI чи OpenRouter) не налаштований. Додайте ключ у вкладці «Налаштування».',
                       'treba-generate-content'
                   ),
-                  esc_url(
-                      admin_url(
-                          'admin.php?page=treba-generate-content&tab=settings'
-                      )
-                  ),
+                  $settings_url,
                   esc_html__('Відкрити налаштування', 'treba-generate-content')
               );
           } else {
               esc_html_e(
-                  'Ключ ще не налаштований адміністратором. Зверніться до відповідальної особи.',
+                  'Жоден API-ключ ще не налаштований адміністратором. Зверніться до відповідальної особи.',
                   'treba-generate-content'
               );
-          } ?>
+          }
+          ?>
 									</p>
 								</div>
 							</td>
 						</tr>
 					<?php else: ?>
 						<tr>
-							<th scope="row"><?php esc_html_e(
-           'Ключ OpenAI API',
-           'treba-generate-content'
-       ); ?></th>
+							<th scope="row"><?php esc_html_e('Ключі API', 'treba-generate-content'); ?></th>
 							<td>
-								<p class="description">
-									<?php esc_html_e(
-             'Ключ збережено адміністратором і буде використано автоматично.',
-             'treba-generate-content'
-         ); ?>
-								</p>
+								<ul class="ul-disc">
+									<li>
+										<?php echo esc_html(
+              sprintf(
+                  'OpenAI: %s',
+                  $has_openai_key
+                      ? esc_html__('налаштовано', 'treba-generate-content')
+                      : esc_html__('нема ключа', 'treba-generate-content')
+              )
+          ); ?>
+									</li>
+									<li>
+										<?php echo esc_html(
+              sprintf(
+                  'OpenRouter: %s',
+                  $has_openrouter_key
+                      ? esc_html__('налаштовано', 'treba-generate-content')
+                      : esc_html__('нема ключа', 'treba-generate-content')
+              )
+          ); ?>
+									</li>
+								</ul>
+								<p class="description"><?php esc_html_e(
+            'Ключі збережено адміністратором і будуть використані автоматично залежно від обраної моделі.',
+            'treba-generate-content'
+        ); ?></p>
 							</td>
 						</tr>
 					<?php endif; ?>
@@ -550,38 +599,6 @@ final class Treba_Generate_Content_Plugin
 					</tr>
 
 					<tr>
-						<th scope="row"><label for="tgpt_tone"><?php esc_html_e(
-          'Тон тексту',
-          'treba-generate-content'
-      ); ?></label></th>
-						<td>
-							<select name="tgpt_tone" id="tgpt_tone">
-								<option value="neutral" <?php selected(
-            $this->get_field_value('tgpt_tone', 'neutral'),
-            'neutral'
-        ); ?>><?php esc_html_e(
-    'Нейтральний діловий',
-    'treba-generate-content'
-); ?></option>
-								<option value="friendly" <?php selected(
-            $this->get_field_value('tgpt_tone', 'neutral'),
-            'friendly'
-        ); ?>><?php esc_html_e(
-    'Дружній пояснювальний',
-    'treba-generate-content'
-); ?></option>
-								<option value="emotional" <?php selected(
-            $this->get_field_value('tgpt_tone', 'neutral'),
-            'emotional'
-        ); ?>><?php esc_html_e(
-    'Емоційний натхненний',
-    'treba-generate-content'
-); ?></option>
-							</select>
-						</td>
-					</tr>
-
-					<tr>
 						<th scope="row"><label for="tgpt_word_goal"><?php esc_html_e(
           'Мінімум слів',
           'treba-generate-content'
@@ -594,24 +611,6 @@ final class Treba_Generate_Content_Plugin
            'AI отримає підказку щодо довжини матеріалу.',
            'treba-generate-content'
        ); ?></p>
-						</td>
-					</tr>
-
-					<tr>
-						<th scope="row"><label for="tgpt_tags"><?php esc_html_e(
-          'Теги (опційно)',
-          'treba-generate-content'
-      ); ?></label></th>
-						<td>
-							<textarea id="tgpt_tags" name="tgpt_tags" rows="2" class="large-text" placeholder="tag 1, tag 2"><?php echo esc_textarea(
-           $this->get_field_value('tgpt_tags')
-       ); ?></textarea>
-							<?php if (!$supports_tags): ?>
-								<p class="description"><?php esc_html_e(
-            'Цей тип запису не підтримує теги — поле буде проігнороване.',
-            'treba-generate-content'
-        ); ?></p>
-							<?php endif; ?>
 						</td>
 					</tr>
 
@@ -692,7 +691,7 @@ final class Treba_Generate_Content_Plugin
 		<div class="card">
 			<h2><?php echo $form_heading; ?></h2>
 			<p><?php esc_html_e(
-       'Використовуйте змінні {topic}, {keywords}. Сервіс автоматично додасть {tone} та {word_goal} з налаштувань форми.',
+       'Використовуйте змінні {topic}, {keywords}. Сервіс автоматично додасть {word_goal} із налаштувань форми.',
        'treba-generate-content'
    ); ?></p>
 			<form method="post">
@@ -878,6 +877,8 @@ final class Treba_Generate_Content_Plugin
     private function render_settings_form()
     {
         $allowed_users = (array) get_option($this->allowed_users_option, []);
+        $has_openai_key = $this->has_api_key();
+        $has_openrouter_key = $this->has_openrouter_api_key();
         $users = get_users([
             'orderby' => 'display_name',
             'order' => 'ASC',
@@ -897,7 +898,7 @@ final class Treba_Generate_Content_Plugin
       ); ?></label></th>
 						<td>
 							<input id="tgpt_api_key" class="regular-text" type="password" name="tgpt_api_key" value="" placeholder="sk-..." autocomplete="off">
-							<?php if ($this->has_api_key()): ?>
+							<?php if ($has_openai_key): ?>
 								<p class="description"><?php esc_html_e(
             'Ключ уже збережений. Залиште поле порожнім, щоб не змінювати.',
             'treba-generate-content'
@@ -909,6 +910,33 @@ final class Treba_Generate_Content_Plugin
 							<?php else: ?>
 								<p class="description"><?php esc_html_e(
             'Введіть ключ один раз, він буде збережений у зашифрованому вигляді.',
+            'treba-generate-content'
+        ); ?></p>
+							<?php endif; ?>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="tgpt_openrouter_api_key"><?php esc_html_e(
+          'OpenRouter API ключ',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<input id="tgpt_openrouter_api_key" class="regular-text" type="password" name="tgpt_openrouter_api_key" value="" placeholder="sk-or-..." autocomplete="off">
+							<?php if ($has_openrouter_key): ?>
+								<p class="description"><?php esc_html_e(
+            'Ключ OpenRouter уже збережений. Залиште поле порожнім, щоб не змінювати.',
+            'treba-generate-content'
+        ); ?></p>
+								<label>
+									<input type="checkbox" name="tgpt_clear_openrouter_api_key" value="1">
+									<?php esc_html_e(
+             'Видалити збережений ключ OpenRouter',
+             'treba-generate-content'
+         ); ?>
+								</label>
+							<?php else: ?>
+								<p class="description"><?php esc_html_e(
+            'Введіть ключ OpenRouter один раз, він буде збережений у зашифрованому вигляді.',
             'treba-generate-content'
         ); ?></p>
 							<?php endif; ?>
@@ -956,6 +984,28 @@ final class Treba_Generate_Content_Plugin
 							</select>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row"><label for="tgpt_temperature"><?php esc_html_e(
+          'Температура відповіді',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<input
+								id="tgpt_temperature"
+								name="tgpt_temperature"
+								type="number"
+								min="0"
+								max="2"
+								step="0.05"
+								value="<?php echo esc_attr($this->get_temperature()); ?>"
+								style="width:120px"
+							>
+							<p class="description"><?php esc_html_e(
+           '0 — максимально детерміновано, 1 — креативніше (OpenRouter може ігнорувати значення для окремих моделей).',
+           'treba-generate-content'
+       ); ?></p>
+						</td>
+					</tr>
 				</tbody>
 			</table>
 
@@ -976,6 +1026,16 @@ final class Treba_Generate_Content_Plugin
             ? trim(sanitize_text_field(wp_unslash($_POST['tgpt_api_key'])))
             : '';
         $should_clear_key = !empty($_POST['tgpt_clear_api_key']);
+        $openrouter_key_input = isset($_POST['tgpt_openrouter_api_key'])
+            ? trim(
+                sanitize_text_field(
+                    wp_unslash($_POST['tgpt_openrouter_api_key'])
+                )
+            )
+            : '';
+        $should_clear_openrouter_key = !empty(
+            $_POST['tgpt_clear_openrouter_api_key']
+        );
 
         if ($should_clear_key) {
             delete_option($this->api_key_option);
@@ -1002,6 +1062,36 @@ final class Treba_Generate_Content_Plugin
             }
         }
 
+        if ($should_clear_openrouter_key) {
+            delete_option($this->openrouter_api_key_option);
+            $this->cached_openrouter_api_key = null;
+            $this->notices[] = esc_html__(
+                'Збережений OpenRouter API-ключ видалено.',
+                'treba-generate-content'
+            );
+        } elseif ('' !== $openrouter_key_input) {
+            $encrypted_openrouter_key = $this->encrypt_api_key(
+                $openrouter_key_input
+            );
+
+            if ($encrypted_openrouter_key) {
+                update_option(
+                    $this->openrouter_api_key_option,
+                    $encrypted_openrouter_key
+                );
+                $this->cached_openrouter_api_key = $openrouter_key_input;
+                $this->notices[] = esc_html__(
+                    'OpenRouter API-ключ оновлено.',
+                    'treba-generate-content'
+                );
+            } else {
+                $this->errors[] = esc_html__(
+                    'Не вдалося зашифрувати OpenRouter API-ключ. Переконайтеся, що на сервері доступне OpenSSL.',
+                    'treba-generate-content'
+                );
+            }
+        }
+
         $allowed_users = isset($_POST['tgpt_allowed_users'])
             ? array_map(
                 'intval',
@@ -1018,6 +1108,22 @@ final class Treba_Generate_Content_Plugin
             : 'gpt-4o-mini';
         if (isset($this->models[$default_model])) {
             update_option($this->default_model_option, $default_model);
+        }
+
+        $temperature_input = isset($_POST['tgpt_temperature'])
+            ? sanitize_text_field(wp_unslash($_POST['tgpt_temperature']))
+            : '';
+
+        if (is_numeric($temperature_input)) {
+            $temperature = (float) $temperature_input;
+
+            if ($temperature < 0) {
+                $temperature = 0.0;
+            } elseif ($temperature > 2) {
+                $temperature = 2.0;
+            }
+
+            update_option($this->temperature_option, $temperature);
         }
 
         $this->notices[] = esc_html__(
@@ -1303,16 +1409,6 @@ final class Treba_Generate_Content_Plugin
     {
         check_admin_referer('tgpt_generate_post');
 
-        $api_key = $this->get_saved_api_key();
-
-        if (empty($api_key)) {
-            $this->errors[] = esc_html__(
-                'Ключ OpenAI API не налаштований. Додайте його у вкладці «Налаштування».',
-                'treba-generate-content'
-            );
-            return;
-        }
-
         $post_types = $this->get_post_type_choices();
         $post_type = isset($_POST['tgpt_post_type'])
             ? wp_unslash($_POST['tgpt_post_type'])
@@ -1338,13 +1434,9 @@ final class Treba_Generate_Content_Plugin
         $post_status = isset($_POST['tgpt_post_status'])
             ? sanitize_key(wp_unslash($_POST['tgpt_post_status']))
             : 'draft';
-        $tone = isset($_POST['tgpt_tone'])
-            ? sanitize_key(wp_unslash($_POST['tgpt_tone']))
-            : 'neutral';
         $word_goal = isset($_POST['tgpt_word_goal'])
             ? absint($_POST['tgpt_word_goal'])
             : 1200;
-        $tags = $this->prepare_list_from_textarea($_POST['tgpt_tags'] ?? '');
         $extra = isset($_POST['tgpt_extra'])
             ? sanitize_textarea_field(wp_unslash($_POST['tgpt_extra']))
             : '';
@@ -1352,7 +1444,6 @@ final class Treba_Generate_Content_Plugin
             ? sanitize_key(wp_unslash($_POST['tgpt_language']))
             : 'uk';
         $supports_categories = is_object_in_taxonomy($post_type, 'category');
-        $supports_tags = is_object_in_taxonomy($post_type, 'post_tag');
 
         if (empty($title)) {
             $this->errors[] = esc_html__(
@@ -1386,13 +1477,38 @@ final class Treba_Generate_Content_Plugin
             $title,
             $keywords,
             $template,
-            $tone,
             $word_goal,
             $extra,
             $language
         );
 
-        $content = $this->request_openai($api_key, $model, $prompt);
+        $is_openrouter = $this->is_openrouter_model($model);
+        $api_key = $is_openrouter
+            ? $this->get_saved_openrouter_api_key()
+            : $this->get_saved_api_key();
+
+        if (empty($api_key)) {
+            $this->errors[] = $is_openrouter
+                ? esc_html__(
+                    'Ключ OpenRouter API не налаштований. Додайте його у вкладці «Налаштування».',
+                    'treba-generate-content'
+                )
+                : esc_html__(
+                    'Ключ OpenAI API не налаштований. Додайте його у вкладці «Налаштування».',
+                    'treba-generate-content'
+                );
+            return;
+        }
+
+        $temperature = $this->get_temperature();
+
+        $content = $this->request_openai(
+            $api_key,
+            $model,
+            $prompt,
+            $is_openrouter,
+            $temperature
+        );
 
         if (empty($content)) {
             return;
@@ -1418,10 +1534,6 @@ final class Treba_Generate_Content_Plugin
 
         if ($supports_categories) {
             $post_data['post_category'] = $category ? [$category] : [];
-        }
-
-        if ($supports_tags && $tags) {
-            $post_data['tags_input'] = $tags;
         }
 
         $post_id = wp_insert_post($post_data, true);
@@ -1458,7 +1570,6 @@ final class Treba_Generate_Content_Plugin
         $title,
         $keywords,
         $template_key,
-        $tone,
         $word_goal,
         $extra,
         $language
@@ -1467,11 +1578,10 @@ final class Treba_Generate_Content_Plugin
         $keywords_str = $keywords
             ? implode(', ', $keywords)
             : esc_html__('ключових слів немає', 'treba-generate-content');
-        $tone_text = $this->get_tone_instruction($tone);
         $length_text = $word_goal
             ? sprintf(
                 esc_html__(
-                    'Цільовий обсяг: не менше %d слів.',
+                    'Напиши мінімум %d слів. Якщо відповідь коротша — продовжуй, доки не досягнеш цього мінімуму.',
                     'treba-generate-content'
                 ),
                 $word_goal
@@ -1485,7 +1595,7 @@ final class Treba_Generate_Content_Plugin
         $base_prompt = strtr($template, [
             '{topic}' => $title,
             '{keywords}' => $keywords_str,
-            '{tone}' => $tone_text,
+            '{tone}' => '',
             '{word_goal}' => $length_text,
         ]);
 
@@ -1502,8 +1612,13 @@ final class Treba_Generate_Content_Plugin
         return implode("\n", array_filter(array_map('trim', $prompt_parts)));
     }
 
-    private function request_openai($api_key, $model, $prompt)
-    {
+    private function request_openai(
+        $api_key,
+        $model,
+        $prompt,
+        $use_openrouter = false,
+        $temperature = 0.65
+    ) {
         $payload = [
             'model' => $model,
             'messages' => [
@@ -1520,21 +1635,28 @@ final class Treba_Generate_Content_Plugin
         ];
 
         // Деякі моделі (наприклад, search-preview) не приймають temperature.
-        if ('gpt-4o-mini-search-preview' !== $model) {
-            $payload['temperature'] = 0.65;
+        if ('gpt-4o-mini-search-preview' !== $model && null !== $temperature) {
+            $payload['temperature'] = $temperature;
         }
 
-        $response = wp_remote_post(
-            'https://api.openai.com/v1/chat/completions',
-            [
-                'headers' => [
-                    'Content-Type' => 'application/json',
-                    'Authorization' => 'Bearer ' . $api_key,
-                ],
-                'body' => wp_json_encode($payload),
-                'timeout' => 60,
-            ]
-        );
+        $headers = [
+            'Content-Type' => 'application/json',
+            'Authorization' => 'Bearer ' . $api_key,
+        ];
+
+        $url = 'https://api.openai.com/v1/chat/completions';
+
+        if ($use_openrouter) {
+            $url = 'https://openrouter.ai/api/v1/chat/completions';
+            $headers['HTTP-Referer'] = home_url('/');
+            $headers['X-Title'] = get_bloginfo('name', 'raw');
+        }
+
+        $response = wp_remote_post($url, [
+            'headers' => $headers,
+            'body' => wp_json_encode($payload),
+            'timeout' => 60,
+        ]);
 
         if (is_wp_error($response)) {
             $this->errors[] = sprintf(
@@ -1606,24 +1728,23 @@ final class Treba_Generate_Content_Plugin
         return isset($this->models[$stored]) ? $stored : 'gpt-4o-mini';
     }
 
-    private function get_tone_instruction($tone)
+    private function get_temperature()
     {
-        $tones = [
-            'neutral' => __(
-                'Залишай нейтральний діловий тон і аргументи на основі фактів.',
-                'treba-generate-content'
-            ),
-            'friendly' => __(
-                'Пиши дружньо та пояснюй складні речі простими словами.',
-                'treba-generate-content'
-            ),
-            'emotional' => __(
-                'Додай емоцій та натхнення, але без перебільшень.',
-                'treba-generate-content'
-            ),
-        ];
+        $stored = get_option($this->temperature_option, 0.65);
+        $value = is_numeric($stored) ? (float) $stored : 0.65;
 
-        return $tones[$tone] ?? $tones['neutral'];
+        if ($value < 0) {
+            $value = 0.0;
+        } elseif ($value > 2) {
+            $value = 2.0;
+        }
+
+        return $value;
+    }
+
+    private function is_openrouter_model($model)
+    {
+        return false !== strpos((string) $model, '/');
     }
 
     private function convert_markdown_to_html($markdown)
@@ -1679,9 +1800,40 @@ final class Treba_Generate_Content_Plugin
         return $this->cached_api_key;
     }
 
+    private function get_saved_openrouter_api_key()
+    {
+        if (null !== $this->cached_openrouter_api_key) {
+            return $this->cached_openrouter_api_key;
+        }
+
+        $stored = get_option($this->openrouter_api_key_option, '');
+
+        if ('' === $stored) {
+            $this->cached_openrouter_api_key = '';
+            return '';
+        }
+
+        $decrypted = $this->decrypt_api_key($stored);
+        $this->cached_openrouter_api_key = is_string($decrypted)
+            ? $decrypted
+            : '';
+
+        return $this->cached_openrouter_api_key;
+    }
+
     private function has_api_key()
     {
         return '' !== $this->get_saved_api_key();
+    }
+
+    private function has_openrouter_api_key()
+    {
+        return '' !== $this->get_saved_openrouter_api_key();
+    }
+
+    private function has_any_api_key()
+    {
+        return $this->has_api_key() || $this->has_openrouter_api_key();
     }
 
     private function encrypt_api_key($api_key)
