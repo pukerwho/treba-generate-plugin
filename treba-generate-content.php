@@ -29,6 +29,8 @@ final class Treba_Generate_Content_Plugin
     private $encryption_key = null;
     private $models = [
         'gpt-4o-mini' => 'GPT-4o mini (швидко та дешево)',
+        'gpt-4o-mini-search-preview' =>
+            'GPT-4o mini search preview (пошук, превʼю)',
         'gpt-4o' => 'GPT-4o (висока якість)',
         'gpt-4.1-mini' => 'GPT-4.1 mini (довші відповіді)',
     ];
@@ -236,9 +238,85 @@ final class Treba_Generate_Content_Plugin
         }
     }
 
+    private function get_post_type_choices()
+    {
+        $post_types = get_post_types(
+            [
+                'public' => true,
+                'show_ui' => true,
+            ],
+            'objects'
+        );
+
+        $choices = [];
+
+        foreach ($post_types as $type => $object) {
+            if ('attachment' === $type) {
+                continue;
+            }
+
+            $label = '';
+
+            if (!empty($object->labels->singular_name)) {
+                $label = $object->labels->singular_name;
+            } elseif (!empty($object->labels->name)) {
+                $label = $object->labels->name;
+            }
+
+            $choices[$type] = $label ?: $type;
+        }
+
+        if (!$choices && post_type_exists('post')) {
+            $post_object = get_post_type_object('post');
+            $choices['post'] =
+                $post_object && !empty($post_object->labels->singular_name)
+                    ? $post_object->labels->singular_name
+                    : 'post';
+        }
+
+        return $choices;
+    }
+
+    private function get_default_post_type_key(array $post_types)
+    {
+        if (isset($post_types['post']) && post_type_exists('post')) {
+            return 'post';
+        }
+
+        $keys = array_keys($post_types);
+
+        return $keys ? (string) $keys[0] : 'post';
+    }
+
+    private function normalize_post_type($post_type, array $available)
+    {
+        $post_type = sanitize_key((string) $post_type);
+
+        if (isset($available[$post_type]) && post_type_exists($post_type)) {
+            return $post_type;
+        }
+
+        return $this->get_default_post_type_key($available);
+    }
+
     private function render_generator_form()
     {
-        $categories = get_categories(['hide_empty' => false]);
+        $post_types = $this->get_post_type_choices();
+        $selected_post_type = $this->normalize_post_type(
+            $this->get_field_value(
+                'tgpt_post_type',
+                $this->get_default_post_type_key($post_types)
+            ),
+            $post_types
+        );
+        $supports_categories = is_object_in_taxonomy(
+            $selected_post_type,
+            'category'
+        );
+        $supports_tags = is_object_in_taxonomy($selected_post_type, 'post_tag');
+        $categories = $supports_categories
+            ? get_categories(['hide_empty' => false])
+            : [];
         $api_key_available = $this->has_api_key();
         $default_template_key = $this->get_default_template_key();
 
@@ -349,20 +427,55 @@ final class Treba_Generate_Content_Plugin
 					</tr>
 
 					<tr>
-						<th scope="row"><?php esc_html_e('Категорія', 'treba-generate-content'); ?></th>
+						<th scope="row"><label for="tgpt_post_type"><?php esc_html_e(
+          'Тип запису',
+          'treba-generate-content'
+      ); ?></label></th>
 						<td>
-							<select name="tgpt_category" required>
-								<?php foreach ($categories as $category): ?>
-									<option value="<?php echo esc_attr($category->term_id); ?>" <?php selected(
-    (int) $this->get_field_value('tgpt_category', 0),
-    $category->term_id
+							<select id="tgpt_post_type" name="tgpt_post_type">
+								<?php foreach ($post_types as $type_key => $type_label): ?>
+									<option value="<?php echo esc_attr($type_key); ?>" <?php selected(
+    $selected_post_type,
+    $type_key
 ); ?>>
-										<?php echo esc_html($category->name); ?>
+										<?php echo esc_html($type_label); ?>
 									</option>
 								<?php endforeach; ?>
 							</select>
+							<p class="description"><?php esc_html_e(
+           'Куди створити запис. Доступні публічні типи з адмінки.',
+           'treba-generate-content'
+       ); ?></p>
 						</td>
 					</tr>
+
+					<?php if ($supports_categories): ?>
+						<tr>
+							<th scope="row"><?php esc_html_e('Категорія', 'treba-generate-content'); ?></th>
+							<td>
+								<select name="tgpt_category" required>
+									<?php foreach ($categories as $category): ?>
+										<option value="<?php echo esc_attr($category->term_id); ?>" <?php selected(
+    (int) $this->get_field_value('tgpt_category', 0),
+    $category->term_id
+); ?>>
+											<?php echo esc_html($category->name); ?>
+										</option>
+									<?php endforeach; ?>
+								</select>
+							</td>
+						</tr>
+					<?php else: ?>
+						<tr>
+							<th scope="row"><?php esc_html_e('Категорія', 'treba-generate-content'); ?></th>
+							<td>
+								<p class="description"><?php esc_html_e(
+            'Для цього типу запису категорії не передбачені.',
+            'treba-generate-content'
+        ); ?></p>
+							</td>
+						</tr>
+					<?php endif; ?>
 
 					<tr>
 						<th scope="row"><?php esc_html_e(
@@ -493,6 +606,12 @@ final class Treba_Generate_Content_Plugin
 							<textarea id="tgpt_tags" name="tgpt_tags" rows="2" class="large-text" placeholder="tag 1, tag 2"><?php echo esc_textarea(
            $this->get_field_value('tgpt_tags')
        ); ?></textarea>
+							<?php if (!$supports_tags): ?>
+								<p class="description"><?php esc_html_e(
+            'Цей тип запису не підтримує теги — поле буде проігнороване.',
+            'treba-generate-content'
+        ); ?></p>
+							<?php endif; ?>
 						</td>
 					</tr>
 
@@ -1194,6 +1313,12 @@ final class Treba_Generate_Content_Plugin
             return;
         }
 
+        $post_types = $this->get_post_type_choices();
+        $post_type = isset($_POST['tgpt_post_type'])
+            ? wp_unslash($_POST['tgpt_post_type'])
+            : $this->get_default_post_type_key($post_types);
+        $post_type = $this->normalize_post_type($post_type, $post_types);
+
         $title = isset($_POST['tgpt_topic'])
             ? sanitize_text_field(wp_unslash($_POST['tgpt_topic']))
             : '';
@@ -1226,6 +1351,8 @@ final class Treba_Generate_Content_Plugin
         $language = isset($_POST['tgpt_language'])
             ? sanitize_key(wp_unslash($_POST['tgpt_language']))
             : 'uk';
+        $supports_categories = is_object_in_taxonomy($post_type, 'category');
+        $supports_tags = is_object_in_taxonomy($post_type, 'post_tag');
 
         if (empty($title)) {
             $this->errors[] = esc_html__(
@@ -1281,17 +1408,23 @@ final class Treba_Generate_Content_Plugin
             return;
         }
 
-        $post_id = wp_insert_post(
-            [
-                'post_title' => $title,
-                'post_content' => wp_kses_post($content),
-                'post_status' => $post_status,
-                'post_author' => get_current_user_id(),
-                'post_category' => $category ? [$category] : [],
-                'tags_input' => $tags,
-            ],
-            true
-        );
+        $post_data = [
+            'post_title' => $title,
+            'post_content' => wp_kses_post($content),
+            'post_status' => $post_status,
+            'post_author' => get_current_user_id(),
+            'post_type' => $post_type,
+        ];
+
+        if ($supports_categories) {
+            $post_data['post_category'] = $category ? [$category] : [];
+        }
+
+        if ($supports_tags && $tags) {
+            $post_data['tags_input'] = $tags;
+        }
+
+        $post_id = wp_insert_post($post_data, true);
 
         if (is_wp_error($post_id)) {
             $this->errors[] = esc_html__(
