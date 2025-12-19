@@ -31,40 +31,64 @@ final class Treba_Generate_Content_Plugin
     private $cached_openrouter_api_key = null;
     private $encryption_key = null;
     private $models = [
-        'gpt-4o-mini' => 'GPT-4o mini (швидко та дешево)',
+        'gpt-4o-mini' => 'GPT-4o mini — Input: $0,15; Output: $0,60',
         'gpt-4o-mini-search-preview' =>
-            'GPT-4o mini search preview (пошук, превʼю)',
-        'gpt-4o' => 'GPT-4o (висока якість)',
-        'gpt-4.1-mini' => 'GPT-4.1 mini (довші відповіді)',
-        'openrouter/auto' => 'OpenRouter Auto (розумний роутинг)',
-        'openai/gpt-4o' => 'OpenRouter · OpenAI GPT-4o',
-        'openai/gpt-4o-mini' => 'OpenRouter · OpenAI GPT-4o mini',
-        'openai/gpt-4.1' => 'OpenRouter · OpenAI GPT-4.1',
-        'openai/gpt-4.1-mini' => 'OpenRouter · OpenAI GPT-4.1 mini',
-        'anthropic/claude-3.5-sonnet' => 'OpenRouter · Claude 3.5 Sonnet',
-        'anthropic/claude-3.5-haiku' => 'OpenRouter · Claude 3.5 Haiku',
+            'GPT-4o mini search preview — Input: $0,15; Output: $0,60',
+        'gpt-4o' => 'GPT-4o — Input: $5; Output: $15',
+        'gpt-4.1-mini' => 'GPT-4.1 mini — Input: $0,40; Output: $1,60',
+        'gpt-5-mini' => 'GPT-5 mini — Input: $0,25; Output: $2',
+        'gpt-5-nano' => 'GPT-5 nano — Input: $0,05; Output: $0,04',
+        'gpt-realtime-mini' => 'GPT Realtime mini — Input: $0,6; Output: $2,4',
+        'gpt-4o-mini-realtime-preview' =>
+            'GPT-4o mini realtime preview — Input: $0,6; Output: $2,4',
+        'openrouter/auto' =>
+            'OpenRouter Auto (розумний роутинг) — Input: -; Output: -',
+        'openai/gpt-4o' =>
+            'OpenRouter · OpenAI GPT-4o — Input: $2,5; Output: $10',
+        'openai/gpt-4o-mini' =>
+            'OpenRouter · OpenAI GPT-4o mini — Input: $0,15; Output: $0,60',
+        'openai/gpt-4.1' =>
+            'OpenRouter · OpenAI GPT-4.1 — Input: $2; Output: $8',
+        'openai/gpt-4.1-mini' =>
+            'OpenRouter · OpenAI GPT-4.1 mini — Input: $0,4; Output: $1,60',
+        'anthropic/claude-3.5-sonnet' =>
+            'OpenRouter · Claude 3.5 Sonnet — Input: $6; Output: $30',
+        'anthropic/claude-3.5-haiku' =>
+            'OpenRouter · Claude 3.5 Haiku — Input: $0,8; Output: $4',
         'meta-llama/llama-3.1-8b-instruct' =>
-            'OpenRouter · Llama 3.1 8B Instruct',
+            'OpenRouter · Llama 3.1 8B Instruct — Input: $0,02; Output: $0,03',
         'meta-llama/llama-3.1-70b-instruct' =>
-            'OpenRouter · Llama 3.1 70B Instruct',
+            'OpenRouter · Llama 3.1 70B Instruct — Input: $0,4; Output: $0,4',
         'mistralai/mixtral-8x7b-instruct' =>
-            'OpenRouter · Mixtral 8x7B Instruct',
+            'OpenRouter · Mixtral 8x7B Instruct — Input: $0,54; Output: $0,54',
         'mistralai/mixtral-8x22b-instruct' =>
-            'OpenRouter · Mixtral 8x22B Instruct',
-        'qwen/qwen-2-72b-instruct' => 'OpenRouter · Qwen2 72B Instruct',
-        'qwen/qwen-2-7b-instruct' => 'OpenRouter · Qwen2 7B Instruct',
+            'OpenRouter · Mixtral 8x22B Instruct — Input: $2; Output: $6',
+        'mistralai/devstral-2512:free' =>
+            'OpenRouter · DevStral 2512 (free) — Input: $0; Output: $0',
+        'qwen/qwen-2-72b-instruct' =>
+            'OpenRouter · Qwen2 72B Instruct — Input: -; Output: -',
+        'qwen/qwen-2-7b-instruct' =>
+            'OpenRouter · Qwen2 7B Instruct — Input: -; Output: -',
+        'qwen/qwen3-235b-a22b-2507' =>
+            'OpenRouter · Qwen3 235B A22B (2507) — Input: $0,07; Output: $0,4',
         'nvidia/nemotron-3-nano-30b-a3b:free' =>
-            'OpenRouter · Nemotron 3 Nano 30B (free)',
-        'mistralai/devstral-2512:free' => 'OpenRouter · DevStral 2512 (free)',
-        'x-ai/grok-code-fast-1' => 'OpenRouter · Grok Code Fast 1',
-        'x-ai/grok-4-fast' => 'OpenRouter · Grok 4 Fast',
-        'google/gemini-2.5-flash' => 'OpenRouter · Gemini 2.5 Flash',
-        'google/gemini-2.0-flash-001' => 'OpenRouter · Gemini 2.0 Flash 001',
-        'deepseek/deepseek-v3.2' => 'OpenRouter · DeepSeek V3.2',
+            'OpenRouter · Nemotron 3 Nano 30B (free) — Input: $0; Output: $0',
+        'x-ai/grok-code-fast-1' =>
+            'OpenRouter · Grok Code Fast 1 — Input: $0,2; Output: $1,5',
+        'x-ai/grok-4-fast' =>
+            'OpenRouter · Grok 4 Fast — Input: $0,2; Output: $0,2',
+        'google/gemini-2.5-flash' =>
+            'OpenRouter · Gemini 2.5 Flash — Input: $0,3; Output: $2,5',
+        'google/gemini-2.0-flash-001' =>
+            'OpenRouter · Gemini 2.0 Flash 001 — Input: $0,1; Output: $0,4',
+        'google/gemini-3-flash-preview' =>
+            'OpenRouter · Gemini 3 Flash preview — Input: $0,5; Output: $3',
+        'deepseek/deepseek-v3.2' =>
+            'OpenRouter · DeepSeek V3.2 — Input: $0,24; Output: $0,38',
         'deepseek/deepseek-chat-v3-0324' =>
-            'OpenRouter · DeepSeek Chat V3 0324',
-        'kwaipilot/kat-coder-pro:free' => 'OpenRouter · KAT Coder Pro (free)',
-        'qwen/qwen3-235b-a22b-2507' => 'OpenRouter · Qwen3 235B A22B (2507)',
+            'OpenRouter · DeepSeek Chat V3 0324 — Input: $0,2; Output: $0,8',
+        'kwaipilot/kat-coder-pro:free' =>
+            'OpenRouter · KAT Coder Pro (free) — Input: $0; Output: $0',
     ];
 
     public function __construct()
