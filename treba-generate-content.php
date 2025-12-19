@@ -1560,6 +1560,11 @@ final class Treba_Generate_Content_Plugin
         } else {
             $temperature = $this->get_temperature();
         }
+
+        // GPT-5 моделі наразі не приймають temperature — використовуємо значення за замовчуванням API.
+        if ($this->is_gpt5_model($model)) {
+            $temperature = null;
+        }
         $max_tokens = $this->calculate_max_tokens($word_goal);
 
         $content = $this->request_openai(
@@ -1696,8 +1701,12 @@ final class Treba_Generate_Content_Plugin
             ],
         ];
 
-        // Деякі моделі (наприклад, search-preview) не приймають temperature.
-        if ('gpt-4o-mini-search-preview' !== $model && null !== $temperature) {
+        // Деякі моделі (наприклад, search-preview або GPT-5) не приймають temperature.
+        if (
+            'gpt-4o-mini-search-preview' !== $model &&
+            !$this->is_gpt5_model($model) &&
+            null !== $temperature
+        ) {
             $payload['temperature'] = $temperature;
         }
 
@@ -1844,6 +1853,11 @@ final class Treba_Generate_Content_Plugin
 
         // Для OpenRouter і решти моделей лишаємо звичний ключ.
         return 'max_tokens';
+    }
+
+    private function is_gpt5_model($model)
+    {
+        return 0 === strpos($model, 'gpt-5');
     }
 
     private function is_openrouter_model($model)
