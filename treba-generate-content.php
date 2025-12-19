@@ -586,6 +586,30 @@ final class Treba_Generate_Content_Plugin
 							</select>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row"><label for="tgpt_temperature_gen"><?php esc_html_e(
+          'Температура',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<input
+								id="tgpt_temperature_gen"
+								name="tgpt_temperature"
+								type="number"
+								min="0"
+								max="2"
+								step="0.05"
+								value="<?php echo esc_attr(
+            $this->get_field_value('tgpt_temperature', $this->get_temperature())
+        ); ?>"
+								style="width:120px"
+							>
+							<p class="description"><?php esc_html_e(
+           '0 — детерміновано, 1 — креативніше. Якщо порожнє, використаємо значення з налаштувань.',
+           'treba-generate-content'
+       ); ?></p>
+						</td>
+					</tr>
 
 					<tr>
 						<th scope="row"><?php esc_html_e(
@@ -1464,6 +1488,9 @@ final class Treba_Generate_Content_Plugin
         $language = isset($_POST['tgpt_language'])
             ? sanitize_key(wp_unslash($_POST['tgpt_language']))
             : 'uk';
+        $temperature_input = isset($_POST['tgpt_temperature'])
+            ? sanitize_text_field(wp_unslash($_POST['tgpt_temperature']))
+            : '';
         $supports_categories = is_object_in_taxonomy($post_type, 'category');
 
         if (empty($title)) {
@@ -1521,7 +1548,18 @@ final class Treba_Generate_Content_Plugin
             return;
         }
 
-        $temperature = $this->get_temperature();
+        if ('' === $temperature_input) {
+            $temperature = $this->get_temperature();
+        } elseif (is_numeric($temperature_input)) {
+            $temperature = (float) $temperature_input;
+            if ($temperature < 0) {
+                $temperature = 0.0;
+            } elseif ($temperature > 2) {
+                $temperature = 2.0;
+            }
+        } else {
+            $temperature = $this->get_temperature();
+        }
         $max_tokens = $this->calculate_max_tokens($word_goal);
 
         $content = $this->request_openai(
