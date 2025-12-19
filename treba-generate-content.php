@@ -38,9 +38,6 @@ final class Treba_Generate_Content_Plugin
         'gpt-4.1-mini' => 'GPT-4.1 mini — Input: $0,40; Output: $1,60',
         'gpt-5-mini' => 'GPT-5 mini — Input: $0,25; Output: $2',
         'gpt-5-nano' => 'GPT-5 nano — Input: $0,05; Output: $0,04',
-        'gpt-realtime-mini' => 'GPT Realtime mini — Input: $0,6; Output: $2,4',
-        'gpt-4o-mini-realtime-preview' =>
-            'GPT-4o mini realtime preview — Input: $0,6; Output: $2,4',
         'openrouter/auto' =>
             'OpenRouter Auto (розумний роутинг) — Input: -; Output: -',
         'openai/gpt-4o' =>
@@ -1667,7 +1664,11 @@ final class Treba_Generate_Content_Plugin
         }
 
         if (null !== $max_tokens) {
-            $payload['max_tokens'] = $max_tokens;
+            $max_tokens_key = $this->get_max_tokens_key(
+                $model,
+                $use_openrouter
+            );
+            $payload[$max_tokens_key] = $max_tokens;
         }
 
         $headers = [
@@ -1794,6 +1795,17 @@ final class Treba_Generate_Content_Plugin
         }
 
         return $estimated;
+    }
+
+    private function get_max_tokens_key($model, $use_openrouter)
+    {
+        // Нові моделі GPT-5 на OpenAI вимагають max_completion_tokens.
+        if (!$use_openrouter && 0 === strpos($model, 'gpt-5')) {
+            return 'max_completion_tokens';
+        }
+
+        // Для OpenRouter і решти моделей лишаємо звичний ключ.
+        return 'max_tokens';
     }
 
     private function is_openrouter_model($model)
