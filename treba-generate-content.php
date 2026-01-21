@@ -1733,6 +1733,9 @@ final class Treba_Generate_Content_Plugin
             $payload['reasoning'] = [
                 'exclude' => true,
             ];
+            $payload['response_format'] = [
+                'type' => 'text',
+            ];
         }
 
         // Деякі моделі (наприклад, search-preview або GPT-5) не приймають temperature.
@@ -1947,6 +1950,14 @@ final class Treba_Generate_Content_Plugin
 
         if ('' !== $text) {
             return $text;
+        }
+
+        if (is_array($message) && !empty($message['annotations'])) {
+            $text = $this->extract_text_from_content($message['annotations']);
+
+            if ('' !== $text) {
+                return $text;
+            }
         }
 
         // Деякі відповіді можуть мати content на верхньому рівні choice.
