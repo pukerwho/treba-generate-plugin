@@ -2028,18 +2028,98 @@ final class Treba_Generate_Content_Plugin
             return '';
         }
 
-        $parts = $body['candidates'][0]['content']['parts'] ?? [];
-        $content = $this->extract_text_from_parts($parts, ['text']);
+        $candidates = $body['candidates'] ?? [];
+
+        if (empty($candidates)) {
+            $block_reason = $body['promptFeedback']['blockReason'] ?? '';
+            $safety = $this->summarize_google_ai_safety(
+                $body['promptFeedback']['safetyRatings'] ?? []
+            );
+            $message =
+                '' !== $block_reason
+                    ? sprintf(
+                        'Google AI Studio заблокував запит: %s.',
+                        $block_reason
+                    )
+                    : 'Google AI Studio не повернув кандидати відповіді.';
+            if ('' !== $safety) {
+                $message .= ' Safety: ' . $safety;
+            }
+            $this->errors[] = esc_html($message);
+            return '';
+        }
+
+        $candidate = $candidates[0] ?? [];
+        $parts = $candidate['content']['parts'] ?? [];
+        $content = '';
+
+        if (is_array($parts)) {
+            if (isset($parts['text']) && is_string($parts['text'])) {
+                $content = trim($parts['text']);
+            } else {
+                $content = $this->extract_text_from_parts($parts, ['text']);
+            }
+        } elseif (is_string($parts)) {
+            $content = trim($parts);
+        }
 
         if ('' === $content) {
-            $this->errors[] = esc_html__(
-                'Google AI Studio не повернув контент.',
-                'treba-generate-content'
+            $content =
+                isset($candidate['content']['text']) &&
+                is_string($candidate['content']['text'])
+                    ? trim($candidate['content']['text'])
+                    : '';
+        }
+
+        if (
+            '' === $content &&
+            isset($candidate['text']) &&
+            is_string($candidate['text'])
+        ) {
+            $content = trim($candidate['text']);
+        }
+
+        if ('' === $content) {
+            $finish_reason = $candidate['finishReason'] ?? '';
+            $safety = $this->summarize_google_ai_safety(
+                $candidate['safetyRatings'] ?? []
             );
+            $message = 'Google AI Studio не повернув контент.';
+            if ('' !== $finish_reason) {
+                $message .= ' Finish reason: ' . $finish_reason . '.';
+            }
+            if ('' !== $safety) {
+                $message .= ' Safety: ' . $safety;
+            }
+            $this->errors[] = esc_html($message);
             return '';
         }
 
         return trim($content);
+    }
+
+    private function summarize_google_ai_safety($ratings)
+    {
+        if (!is_array($ratings) || empty($ratings)) {
+            return '';
+        }
+
+        $items = [];
+
+        foreach ($ratings as $rating) {
+            if (!is_array($rating)) {
+                continue;
+            }
+
+            $category = $rating['category'] ?? '';
+            $probability = $rating['probability'] ?? '';
+
+            if ('' !== $category || '' !== $probability) {
+                $items[] = trim($category . ':' . $probability, ':');
+            }
+        }
+
+        return implode(', ', $items);
     }
 
     private function prepare_list_from_textarea($raw)
