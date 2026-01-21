@@ -30,7 +30,6 @@ final class Treba_Generate_Content_Plugin
     private $cached_api_key = null;
     private $cached_openrouter_api_key = null;
     private $encryption_key = null;
-    private $last_openrouter_content_types = [];
     private $models = [
         'gpt-4o-mini' => 'GPT-4o mini — Input: $0,15; Output: $0,60',
         'gpt-4o-mini-search-preview' =>
@@ -1731,6 +1730,9 @@ final class Treba_Generate_Content_Plugin
         if ($use_openrouter && 'google/gemini-3-pro-preview' === $model) {
             $payload['messages'][0]['content'] .=
                 ' Respond only with the final answer. Do not include any reasoning or analysis.';
+            $payload['reasoning'] = [
+                'exclude' => true,
+            ];
         }
 
         // Деякі моделі (наприклад, search-preview або GPT-5) не приймають temperature.
@@ -1805,38 +1807,6 @@ final class Treba_Generate_Content_Plugin
 
         $first_choice = $body['choices'][0] ?? [];
         $content = $this->extract_choice_content($first_choice, $model);
-
-        if (
-            $use_openrouter &&
-            'google/gemini-3-pro-preview' === $model &&
-            'google-gemini-v1' === $content
-        ) {
-            $types = !empty($this->last_openrouter_content_types)
-                ? implode(', ', $this->last_openrouter_content_types)
-                : 'типів не знайдено';
-            $details_summary = $this->summarize_reasoning_details(
-                $first_choice['message']['reasoning_details'] ?? []
-            );
-            $this->errors[] = sprintf(
-                '%s %s',
-                esc_html__(
-                    'OpenRouter повернув службовий контент (google-gemini-v1). Типи частин:',
-                    'treba-generate-content'
-                ),
-                esc_html($types)
-            );
-            if ('' !== $details_summary) {
-                $this->errors[] = sprintf(
-                    '%s %s',
-                    esc_html__(
-                        'OpenRouter reasoning_details (структура):',
-                        'treba-generate-content'
-                    ),
-                    esc_html($details_summary)
-                );
-            }
-            return '';
-        }
 
         if (empty($content)) {
             $hint = '';
@@ -1953,16 +1923,10 @@ final class Treba_Generate_Content_Plugin
 
         if (
             'google/gemini-3-pro-preview' === $model &&
-            is_array($message) &&
-            isset($message['reasoning_details'])
+            is_string($content) &&
+            'google-gemini-v1' === trim($content)
         ) {
-            $final = $this->extract_final_from_reasoning_details(
-                $message['reasoning_details']
-            );
-
-            if ('' !== $final) {
-                return $final;
-            }
+            return '';
         }
 
         if ('google/gemini-3-pro-preview' === $model && is_array($content)) {
@@ -2009,7 +1973,6 @@ final class Treba_Generate_Content_Plugin
     private function extract_text_from_parts($parts, $allowed_types)
     {
         $texts = [];
-        $types = [];
 
         foreach ($parts as $part) {
             if (!is_array($part)) {
@@ -2022,11 +1985,6 @@ final class Treba_Generate_Content_Plugin
             $type = isset($part['type'])
                 ? strtolower((string) $part['type'])
                 : '';
-            if ('' !== $type) {
-                $types[$type] = true;
-            } else {
-                $types['(empty)'] = true;
-            }
 
             if ('' !== $type && !in_array($type, $allowed_types, true)) {
                 continue;
@@ -2043,52 +2001,7 @@ final class Treba_Generate_Content_Plugin
             }
         }
 
-        $result = trim(implode("\n", array_filter(array_map('trim', $texts))));
-
-        $this->last_openrouter_content_types = !empty($types)
-            ? array_keys($types)
-            : ['типів не знайдено'];
-
-        return $result;
-    }
-
-    private function summarize_reasoning_details($details)
-    {
-        if (!is_array($details) || empty($details)) {
-            return '';
-        }
-
-        $types = [];
-        $keys = [];
-        $limit = 0;
-
-        foreach ($details as $detail) {
-            if (!is_array($detail)) {
-                continue;
-            }
-
-            if (isset($detail['type']) && is_string($detail['type'])) {
-                $types[strtolower($detail['type'])] = true;
-            }
-
-            foreach (array_keys($detail) as $key) {
-                $keys[$key] = true;
-            }
-
-            $limit++;
-            if ($limit >= 10) {
-                break;
-            }
-        }
-
-        $type_list = !empty($types)
-            ? implode(', ', array_keys($types))
-            : 'немає type';
-        $key_list = !empty($keys)
-            ? implode(', ', array_keys($keys))
-            : 'немає ключів';
-
-        return sprintf('types: %s; keys: %s', $type_list, $key_list);
+        return trim(implode("\n", array_filter(array_map('trim', $texts))));
     }
 
     /**
@@ -2181,77 +2094,6 @@ final class Treba_Generate_Content_Plugin
         }
 
         return $result;
-    }
-
-    /**
-     * Витягує фінальну відповідь з reasoning_details, не підмішуючи роздуми.
-     */
-    private function extract_final_from_reasoning_details($details)
-    {
-        if (!is_array($details)) {
-            return '';
-        }
-
-        $allowed_keys = [
-            'final',
-            'final_answer',
-            'answer',
-            'output_text',
-            'response',
-            'result',
-        ];
-
-        return $this->find_final_from_reasoning_details(
-            $details,
-            $allowed_keys
-        );
-    }
-
-    private function find_final_from_reasoning_details($node, $allowed_keys)
-    {
-        if (is_string($node)) {
-            $trimmed = trim($node);
-            return '' === $trimmed ? '' : $trimmed;
-        }
-
-        if (!is_array($node)) {
-            return '';
-        }
-
-        if (isset($node['type']) && is_string($node['type'])) {
-            $type = strtolower($node['type']);
-
-            if (in_array($type, ['final', 'final_answer', 'answer'], true)) {
-                $text = $this->extract_text_from_content($node);
-
-                if ('' !== $text) {
-                    return $text;
-                }
-            }
-        }
-
-        foreach ($allowed_keys as $key) {
-            if (array_key_exists($key, $node)) {
-                $text = $this->extract_text_from_content($node[$key]);
-
-                if ('' !== $text) {
-                    return $text;
-                }
-            }
-        }
-
-        foreach ($node as $value) {
-            $text = $this->find_final_from_reasoning_details(
-                $value,
-                $allowed_keys
-            );
-
-            if ('' !== $text) {
-                return $text;
-            }
-        }
-
-        return '';
     }
 
     private function get_max_tokens_key($model, $use_openrouter)
