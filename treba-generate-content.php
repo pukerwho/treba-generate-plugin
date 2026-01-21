@@ -1996,14 +1996,17 @@ final class Treba_Generate_Content_Plugin
 
         $result = trim(implode("\n", array_filter(array_map('trim', $texts))));
 
-        if ('' === $result && !empty($types)) {
+        if ('' === $result) {
+            $type_list = !empty($types)
+                ? implode(', ', array_keys($types))
+                : 'типів не знайдено';
             $this->errors[] = sprintf(
                 '%s %s',
                 esc_html__(
                     'OpenRouter типи контенту:',
                     'treba-generate-content'
                 ),
-                esc_html(implode(', ', array_keys($types)))
+                esc_html($type_list)
             );
         }
 
