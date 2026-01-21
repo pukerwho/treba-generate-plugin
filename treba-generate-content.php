@@ -1703,6 +1703,14 @@ final class Treba_Generate_Content_Plugin
             ],
         ];
 
+        // Для Gemini 3 Pro Preview через OpenRouter просимо не повертати reasoning,
+        // бо інколи контент потрапляє лише в reasoning_details.
+        if ($use_openrouter && 'google/gemini-3-pro-preview' === $model) {
+            $payload['reasoning'] = false;
+            $payload['messages'][0]['content'] .=
+                ' Respond only with the final answer. Do not include any reasoning or analysis.';
+        }
+
         // Деякі моделі (наприклад, search-preview або GPT-5) не приймають temperature.
         if (
             'gpt-4o-mini-search-preview' !== $model &&
