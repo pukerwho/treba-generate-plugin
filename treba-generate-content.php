@@ -19,6 +19,7 @@ final class Treba_Generate_Content_Plugin
     private $allowed_users_option = 'treba_gpt_allowed_users';
     private $api_key_option = 'treba_gpt_api_key';
     private $openrouter_api_key_option = 'treba_openrouter_api_key';
+    private $google_ai_api_key_option = 'treba_google_ai_api_key';
     private $default_model_option = 'treba_gpt_default_model';
     private $temperature_option = 'treba_gpt_temperature';
     private $notices = [];
@@ -29,6 +30,7 @@ final class Treba_Generate_Content_Plugin
     private $markdown_parser;
     private $cached_api_key = null;
     private $cached_openrouter_api_key = null;
+    private $cached_google_ai_api_key = null;
     private $encryption_key = null;
     private $models = [
         'gpt-4o-mini' => 'GPT-4o mini — Input: $0,15; Output: $0,60',
@@ -80,6 +82,8 @@ final class Treba_Generate_Content_Plugin
             'OpenRouter · Gemini 2.0 Flash 001 — Input: $0,1; Output: $0,4',
         'google/gemini-3-flash-preview' =>
             'OpenRouter · Gemini 3 Flash preview — Input: $0,5; Output: $3',
+        'googleai/gemini-3-pro-preview' =>
+            'Google AI Studio · Gemini 3 Pro preview — Input: $2; Output: $12',
         'google/gemini-3-pro-preview' =>
             'OpenRouter · Gemini 3 Pro preview — Input: $2; Output: $12',
         'deepseek/deepseek-v3.2' =>
@@ -926,6 +930,7 @@ final class Treba_Generate_Content_Plugin
         $allowed_users = (array) get_option($this->allowed_users_option, []);
         $has_openai_key = $this->has_api_key();
         $has_openrouter_key = $this->has_openrouter_api_key();
+        $has_google_ai_key = $this->has_google_ai_api_key();
         $users = get_users([
             'orderby' => 'display_name',
             'order' => 'ASC',
@@ -984,6 +989,33 @@ final class Treba_Generate_Content_Plugin
 							<?php else: ?>
 								<p class="description"><?php esc_html_e(
             'Введіть ключ OpenRouter один раз, він буде збережений у зашифрованому вигляді.',
+            'treba-generate-content'
+        ); ?></p>
+							<?php endif; ?>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="tgpt_google_ai_api_key"><?php esc_html_e(
+          'Google AI Studio API ключ',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<input id="tgpt_google_ai_api_key" class="regular-text" type="password" name="tgpt_google_ai_api_key" value="" placeholder="AIza..." autocomplete="off">
+							<?php if ($has_google_ai_key): ?>
+								<p class="description"><?php esc_html_e(
+            'Ключ Google AI Studio уже збережений. Залиште поле порожнім, щоб не змінювати.',
+            'treba-generate-content'
+        ); ?></p>
+								<label>
+									<input type="checkbox" name="tgpt_clear_google_ai_api_key" value="1">
+									<?php esc_html_e(
+             'Видалити збережений ключ Google AI Studio',
+             'treba-generate-content'
+         ); ?>
+								</label>
+							<?php else: ?>
+								<p class="description"><?php esc_html_e(
+            'Введіть ключ Google AI Studio один раз, він буде збережений у зашифрованому вигляді.',
             'treba-generate-content'
         ); ?></p>
 							<?php endif; ?>
@@ -1134,6 +1166,47 @@ final class Treba_Generate_Content_Plugin
             } else {
                 $this->errors[] = esc_html__(
                     'Не вдалося зашифрувати OpenRouter API-ключ. Переконайтеся, що на сервері доступне OpenSSL.',
+                    'treba-generate-content'
+                );
+            }
+        }
+
+        $google_ai_key_input = isset($_POST['tgpt_google_ai_api_key'])
+            ? trim(
+                sanitize_text_field(
+                    wp_unslash($_POST['tgpt_google_ai_api_key'])
+                )
+            )
+            : '';
+        $should_clear_google_ai_key = !empty(
+            $_POST['tgpt_clear_google_ai_api_key']
+        );
+
+        if ($should_clear_google_ai_key) {
+            delete_option($this->google_ai_api_key_option);
+            $this->cached_google_ai_api_key = null;
+            $this->notices[] = esc_html__(
+                'Збережений Google AI Studio API-ключ видалено.',
+                'treba-generate-content'
+            );
+        } elseif ('' !== $google_ai_key_input) {
+            $encrypted_google_ai_key = $this->encrypt_api_key(
+                $google_ai_key_input
+            );
+
+            if ($encrypted_google_ai_key) {
+                update_option(
+                    $this->google_ai_api_key_option,
+                    $encrypted_google_ai_key
+                );
+                $this->cached_google_ai_api_key = $google_ai_key_input;
+                $this->notices[] = esc_html__(
+                    'Google AI Studio API-ключ оновлено.',
+                    'treba-generate-content'
+                );
+            } else {
+                $this->errors[] = esc_html__(
+                    'Не вдалося зашифрувати Google AI Studio API-ключ. Переконайтеся, що на сервері доступне OpenSSL.',
                     'treba-generate-content'
                 );
             }
@@ -1532,28 +1605,46 @@ final class Treba_Generate_Content_Plugin
             $language
         );
 
-        $is_openrouter = $this->is_openrouter_model($model);
-        $api_key = $is_openrouter
-            ? $this->get_saved_openrouter_api_key()
-            : $this->get_saved_api_key();
+        $provider = $this->get_provider_for_model($model);
+        $is_openrouter = 'openrouter' === $provider;
+        $api_key =
+            'openrouter' === $provider
+                ? $this->get_saved_openrouter_api_key()
+                : ('googleai' === $provider
+                    ? $this->get_saved_google_ai_api_key()
+                    : $this->get_saved_api_key());
         $api_key = trim((string) $api_key);
 
         if ('' === $api_key) {
-            $this->errors[] = $is_openrouter
-                ? esc_html__(
-                    'Ключ OpenRouter API не налаштований. Додайте його у вкладці «Налаштування».',
-                    'treba-generate-content'
-                )
-                : esc_html__(
-                    'Ключ OpenAI API не налаштований. Додайте його у вкладці «Налаштування».',
-                    'treba-generate-content'
-                );
+            $this->errors[] =
+                'openrouter' === $provider
+                    ? esc_html__(
+                        'Ключ OpenRouter API не налаштований. Додайте його у вкладці «Налаштування».',
+                        'treba-generate-content'
+                    )
+                    : ('googleai' === $provider
+                        ? esc_html__(
+                            'Ключ Google AI Studio API не налаштований. Додайте його у вкладці «Налаштування».',
+                            'treba-generate-content'
+                        )
+                        : esc_html__(
+                            'Ключ OpenAI API не налаштований. Додайте його у вкладці «Налаштування».',
+                            'treba-generate-content'
+                        ));
             return;
         }
 
-        if ($is_openrouter && 0 !== strpos($api_key, 'sk-or-')) {
+        if ('openrouter' === $provider && 0 !== strpos($api_key, 'sk-or-')) {
             $this->errors[] = esc_html__(
                 'OpenRouter API ключ має починатися з "sk-or-". Перевірте ключ у вкладці «Налаштування».',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        if ('googleai' === $provider && 0 !== strpos($api_key, 'AIza')) {
+            $this->errors[] = esc_html__(
+                'Google AI Studio API ключ зазвичай починається з "AIza". Перевірте ключ у вкладці «Налаштування».',
                 'treba-generate-content'
             );
             return;
@@ -1578,14 +1669,23 @@ final class Treba_Generate_Content_Plugin
         }
         $max_tokens = $this->calculate_max_tokens($word_goal);
 
-        $content = $this->request_openai(
-            $api_key,
-            $model,
-            $prompt,
-            $is_openrouter,
-            $temperature,
-            $max_tokens
-        );
+        $content =
+            'googleai' === $provider
+                ? $this->request_google_ai(
+                    $api_key,
+                    $model,
+                    $prompt,
+                    $temperature,
+                    $max_tokens
+                )
+                : $this->request_openai(
+                    $api_key,
+                    $model,
+                    $prompt,
+                    $is_openrouter,
+                    $temperature,
+                    $max_tokens
+                );
 
         if (empty($content)) {
             return;
@@ -1838,6 +1938,104 @@ final class Treba_Generate_Content_Plugin
                         'OpenAI не повернув контент',
                         'treba-generate-content'
                     )) . esc_html($hint);
+            return '';
+        }
+
+        return trim($content);
+    }
+
+    private function request_google_ai(
+        $api_key,
+        $model,
+        $prompt,
+        $temperature = 0.65,
+        $max_tokens = null
+    ) {
+        $model_name = $this->get_google_ai_model_name($model);
+        $url = sprintf(
+            'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s',
+            rawurlencode($model_name),
+            rawurlencode($api_key)
+        );
+
+        $payload = [
+            'systemInstruction' => [
+                'parts' => [
+                    [
+                        'text' =>
+                            'You are a helpful assistant that writes well-structured long-form SEO articles.',
+                    ],
+                ],
+            ],
+            'contents' => [
+                [
+                    'role' => 'user',
+                    'parts' => [
+                        [
+                            'text' => $prompt,
+                        ],
+                    ],
+                ],
+            ],
+            'generationConfig' => [
+                'responseMimeType' => 'text/plain',
+            ],
+        ];
+
+        if (null !== $temperature) {
+            $payload['generationConfig']['temperature'] = $temperature;
+        }
+
+        if (null !== $max_tokens) {
+            $payload['generationConfig']['maxOutputTokens'] = (int) $max_tokens;
+        }
+
+        $response = wp_remote_post($url, [
+            'headers' => [
+                'Content-Type' => 'application/json',
+            ],
+            'body' => wp_json_encode($payload),
+            'timeout' => 180,
+        ]);
+
+        if (is_wp_error($response)) {
+            $this->errors[] = sprintf(
+                '%s %s',
+                esc_html__(
+                    'Помилка запиту до Google AI Studio:',
+                    'treba-generate-content'
+                ),
+                esc_html($response->get_error_message())
+            );
+            return '';
+        }
+
+        $code = wp_remote_retrieve_response_code($response);
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+
+        if (200 !== $code) {
+            $message =
+                $body['error']['message'] ??
+                esc_html__('Невідома помилка API.', 'treba-generate-content');
+            $this->errors[] = sprintf(
+                '%s %s',
+                esc_html__(
+                    'Google AI Studio повернув помилку:',
+                    'treba-generate-content'
+                ),
+                esc_html($message)
+            );
+            return '';
+        }
+
+        $parts = $body['candidates'][0]['content']['parts'] ?? [];
+        $content = $this->extract_text_from_parts($parts, ['text']);
+
+        if ('' === $content) {
+            $this->errors[] = esc_html__(
+                'Google AI Studio не повернув контент.',
+                'treba-generate-content'
+            );
             return '';
         }
 
@@ -2123,9 +2321,33 @@ final class Treba_Generate_Content_Plugin
         return 0 === strpos($model, 'gpt-5');
     }
 
+    private function is_google_ai_model($model)
+    {
+        return 0 === strpos((string) $model, 'googleai/');
+    }
+
+    private function get_google_ai_model_name($model)
+    {
+        return ltrim(substr((string) $model, strlen('googleai/')), '/');
+    }
+
+    private function get_provider_for_model($model)
+    {
+        if ($this->is_google_ai_model($model)) {
+            return 'googleai';
+        }
+
+        if ($this->is_openrouter_model($model)) {
+            return 'openrouter';
+        }
+
+        return 'openai';
+    }
+
     private function is_openrouter_model($model)
     {
-        return false !== strpos((string) $model, '/');
+        return false !== strpos((string) $model, '/') &&
+            !$this->is_google_ai_model($model);
     }
 
     private function convert_markdown_to_html($markdown)
@@ -2202,6 +2424,27 @@ final class Treba_Generate_Content_Plugin
         return $this->cached_openrouter_api_key;
     }
 
+    private function get_saved_google_ai_api_key()
+    {
+        if (null !== $this->cached_google_ai_api_key) {
+            return $this->cached_google_ai_api_key;
+        }
+
+        $stored = get_option($this->google_ai_api_key_option, '');
+
+        if ('' === $stored) {
+            $this->cached_google_ai_api_key = '';
+            return '';
+        }
+
+        $decrypted = $this->decrypt_api_key($stored);
+        $this->cached_google_ai_api_key = is_string($decrypted)
+            ? $decrypted
+            : '';
+
+        return $this->cached_google_ai_api_key;
+    }
+
     private function has_api_key()
     {
         return '' !== $this->get_saved_api_key();
@@ -2212,9 +2455,16 @@ final class Treba_Generate_Content_Plugin
         return '' !== $this->get_saved_openrouter_api_key();
     }
 
+    private function has_google_ai_api_key()
+    {
+        return '' !== $this->get_saved_google_ai_api_key();
+    }
+
     private function has_any_api_key()
     {
-        return $this->has_api_key() || $this->has_openrouter_api_key();
+        return $this->has_api_key() ||
+            $this->has_openrouter_api_key() ||
+            $this->has_google_ai_api_key();
     }
 
     private function encrypt_api_key($api_key)
