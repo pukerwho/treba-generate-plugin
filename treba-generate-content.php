@@ -1964,6 +1964,15 @@ final class Treba_Generate_Content_Plugin
             return $result;
         }
 
+        // Якщо це блок reasoning/analysis — ігноруємо
+        if (isset($node['type']) && is_string($node['type'])) {
+            $type = strtolower($node['type']);
+
+            if (in_array($type, ['reasoning', 'analysis'], true)) {
+                return $result;
+            }
+        }
+
         // Якщо асоціативний масив із текстом прямо
         $has_text = isset($node['text']) && is_string($node['text']);
         $has_value = isset($node['value']) && is_string($node['value']);
