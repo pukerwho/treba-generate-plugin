@@ -80,6 +80,8 @@ final class Treba_Generate_Content_Plugin
             'OpenRouter · Gemini 2.0 Flash 001 — Input: $0,1; Output: $0,4',
         'google/gemini-3-flash-preview' =>
             'OpenRouter · Gemini 3 Flash preview — Input: $0,5; Output: $3',
+        'google/gemini-3-pro-preview' =>
+            'OpenRouter · Gemini 3 Pro preview — Input: $2; Output: $12',
         'deepseek/deepseek-v3.2' =>
             'OpenRouter · DeepSeek V3.2 — Input: $0,24; Output: $0,38',
         'deepseek/deepseek-chat-v3-0324' =>
