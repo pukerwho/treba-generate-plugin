@@ -1771,7 +1771,8 @@ final class Treba_Generate_Content_Plugin
             return '';
         }
 
-        $content = $body['choices'][0]['message']['content'] ?? '';
+        $first_choice = $body['choices'][0] ?? [];
+        $content = $this->extract_choice_content($first_choice);
 
         if (empty($content)) {
             $this->errors[] = esc_html__(
@@ -1844,6 +1845,41 @@ final class Treba_Generate_Content_Plugin
         }
 
         return $estimated;
+    }
+
+    /**
+     * OpenRouter деякі моделі (зокрема Gemini) віддають контент масивом частин.
+     * Агрегуємо їх у звичайний текст.
+     */
+    private function extract_choice_content($choice)
+    {
+        $message = is_array($choice) ? $choice['message'] ?? [] : [];
+        $content = is_array($message) ? $message['content'] ?? '' : '';
+
+        if (is_string($content)) {
+            return trim($content);
+        }
+
+        if (!is_array($content)) {
+            return '';
+        }
+
+        $parts = [];
+
+        foreach ($content as $part) {
+            if (is_array($part) && isset($part['type'], $part['text'])) {
+                if (
+                    'text' === $part['type'] &&
+                    '' !== trim((string) $part['text'])
+                ) {
+                    $parts[] = (string) $part['text'];
+                }
+            } elseif (is_string($part) && '' !== trim($part)) {
+                $parts[] = $part;
+            }
+        }
+
+        return trim(implode("\n", array_map('trim', $parts)));
     }
 
     private function get_max_tokens_key($model, $use_openrouter)
