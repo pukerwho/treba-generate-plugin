@@ -1897,6 +1897,23 @@ final class Treba_Generate_Content_Plugin
         $text = $this->extract_text_from_content($content);
 
         if ('' !== $text) {
+            if (
+                'google/gemini-3-pro-preview' === $model &&
+                $this->looks_like_reasoning($text)
+            ) {
+                $final = $this->extract_final_from_reasoning_details(
+                    is_array($message)
+                        ? $message['reasoning_details'] ?? []
+                        : []
+                );
+
+                if ('' !== $final) {
+                    return $final;
+                }
+
+                return '';
+            }
+
             return $text;
         }
 
@@ -1996,15 +2013,7 @@ final class Treba_Generate_Content_Plugin
 
         // Якщо асоціативний масив з вкладеним контентом
         foreach (
-            [
-                'content',
-                'parts',
-                'segments',
-                'output_text',
-                'reasoning',
-                'reasoning_details',
-                'annotations',
-            ]
+            ['content', 'parts', 'segments', 'output_text', 'annotations']
             as $key
         ) {
             if (isset($node[$key])) {
@@ -2080,7 +2089,20 @@ final class Treba_Generate_Content_Plugin
         if (isset($node['type']) && is_string($node['type'])) {
             $type = strtolower($node['type']);
 
-            if (in_array($type, ['final', 'final_answer', 'answer'], true)) {
+            if (
+                in_array(
+                    $type,
+                    [
+                        'final',
+                        'final_answer',
+                        'answer',
+                        'output_text',
+                        'response',
+                        'result',
+                    ],
+                    true
+                )
+            ) {
                 $text = $this->extract_text_from_content($node);
 
                 if ('' !== $text) {
@@ -2110,6 +2132,50 @@ final class Treba_Generate_Content_Plugin
         }
 
         return $parts;
+    }
+
+    /**
+     * Евристика: чи схоже, що текст містить лише reasoning без фінальної відповіді.
+     */
+    private function looks_like_reasoning($text)
+    {
+        if (!is_string($text)) {
+            return false;
+        }
+
+        $trimmed = trim($text);
+
+        if ('' === $trimmed) {
+            return false;
+        }
+
+        $lower = strtolower($trimmed);
+        $has_cyrillic = (bool) preg_match('/[А-Яа-яЁёІіЇїЄєҐґ]/u', $trimmed);
+        $markers = [
+            'examining',
+            'structuring',
+            'reviewing',
+            'decoding',
+            'analyzing',
+            'analysis',
+            'reasoning',
+            'scope of work',
+            'project',
+            'parameters',
+            "i'm",
+            'i’ve',
+            'i am',
+            'my next step',
+            'i’m',
+        ];
+
+        foreach ($markers as $marker) {
+            if (false !== strpos($lower, $marker)) {
+                return !$has_cyrillic;
+            }
+        }
+
+        return false;
     }
 
     private function get_max_tokens_key($model, $use_openrouter)
