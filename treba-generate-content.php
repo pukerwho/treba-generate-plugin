@@ -1894,39 +1894,7 @@ final class Treba_Generate_Content_Plugin
         // Основна гілка: message->content
         $message = $choice['message'] ?? [];
         $content = is_array($message) ? $message['content'] ?? '' : $message;
-        $text = $this->extract_text_from_content($content);
 
-        if ('' !== $text) {
-            if (
-                'google/gemini-3-pro-preview' === $model &&
-                $this->looks_like_reasoning($text)
-            ) {
-                $final = $this->extract_final_from_reasoning_details(
-                    is_array($message)
-                        ? $message['reasoning_details'] ?? []
-                        : []
-                );
-
-                if ('' !== $final) {
-                    return $final;
-                }
-
-                return '';
-            }
-
-            return $text;
-        }
-
-        // Деякі відповіді можуть мати content на верхньому рівні choice.
-        if (isset($choice['content'])) {
-            $fallback = $this->extract_text_from_content($choice['content']);
-
-            if ('' !== $fallback) {
-                return $fallback;
-            }
-        }
-
-        // Для Gemini 3 Pro Preview інколи фінал приходить у reasoning_details.
         if (
             'google/gemini-3-pro-preview' === $model &&
             is_array($message) &&
@@ -1938,6 +1906,21 @@ final class Treba_Generate_Content_Plugin
 
             if ('' !== $final) {
                 return $final;
+            }
+        }
+
+        $text = $this->extract_text_from_content($content);
+
+        if ('' !== $text) {
+            return $text;
+        }
+
+        // Деякі відповіді можуть мати content на верхньому рівні choice.
+        if (isset($choice['content'])) {
+            $fallback = $this->extract_text_from_content($choice['content']);
+
+            if ('' !== $fallback) {
+                return $fallback;
             }
         }
 
@@ -1960,7 +1943,7 @@ final class Treba_Generate_Content_Plugin
      * - прості рядки;
      * - масиви рядків;
      * - масиви частин з ключами text/content/value;
-     * - вкладені масиви у ключах content/parts/segments/output_text/reasoning/reasoning_details/annotations.
+     * - вкладені масиви у ключах content/parts/segments/output_text/annotations.
      */
     private function flatten_content_to_strings($node)
     {
@@ -1981,11 +1964,17 @@ final class Treba_Generate_Content_Plugin
             return $result;
         }
 
-        // Якщо це блок reasoning/analysis — ігноруємо
+        // Якщо це блок reasoning/analysis/thought — ігноруємо
         if (isset($node['type']) && is_string($node['type'])) {
             $type = strtolower($node['type']);
 
-            if (in_array($type, ['reasoning', 'analysis'], true)) {
+            if (
+                in_array(
+                    $type,
+                    ['reasoning', 'analysis', 'thought', 'internal_monologue'],
+                    true
+                )
+            ) {
                 return $result;
             }
         }
@@ -2057,56 +2046,31 @@ final class Treba_Generate_Content_Plugin
             'result',
         ];
 
-        $parts = $this->collect_final_from_reasoning_details(
+        return $this->find_final_from_reasoning_details(
             $details,
             $allowed_keys
         );
-
-        return trim(implode("\n", array_filter($parts)));
     }
 
-    /**
-     * Рекурсивно збирає фінальну відповідь з reasoning_details за whitelist-ключами.
-     */
-    private function collect_final_from_reasoning_details($node, $allowed_keys)
+    private function find_final_from_reasoning_details($node, $allowed_keys)
     {
-        $parts = [];
-
         if (is_string($node)) {
             $trimmed = trim($node);
-
-            if ('' !== $trimmed) {
-                $parts[] = $trimmed;
-            }
-
-            return $parts;
+            return '' === $trimmed ? '' : $trimmed;
         }
 
         if (!is_array($node)) {
-            return $parts;
+            return '';
         }
 
         if (isset($node['type']) && is_string($node['type'])) {
             $type = strtolower($node['type']);
 
-            if (
-                in_array(
-                    $type,
-                    [
-                        'final',
-                        'final_answer',
-                        'answer',
-                        'output_text',
-                        'response',
-                        'result',
-                    ],
-                    true
-                )
-            ) {
+            if (in_array($type, ['final', 'final_answer', 'answer'], true)) {
                 $text = $this->extract_text_from_content($node);
 
                 if ('' !== $text) {
-                    $parts[] = $text;
+                    return $text;
                 }
             }
         }
@@ -2116,66 +2080,23 @@ final class Treba_Generate_Content_Plugin
                 $text = $this->extract_text_from_content($node[$key]);
 
                 if ('' !== $text) {
-                    $parts[] = $text;
+                    return $text;
                 }
             }
         }
 
         foreach ($node as $value) {
-            $parts = array_merge(
-                $parts,
-                $this->collect_final_from_reasoning_details(
-                    $value,
-                    $allowed_keys
-                )
+            $text = $this->find_final_from_reasoning_details(
+                $value,
+                $allowed_keys
             );
-        }
 
-        return $parts;
-    }
-
-    /**
-     * Евристика: чи схоже, що текст містить лише reasoning без фінальної відповіді.
-     */
-    private function looks_like_reasoning($text)
-    {
-        if (!is_string($text)) {
-            return false;
-        }
-
-        $trimmed = trim($text);
-
-        if ('' === $trimmed) {
-            return false;
-        }
-
-        $lower = strtolower($trimmed);
-        $has_cyrillic = (bool) preg_match('/[А-Яа-яЁёІіЇїЄєҐґ]/u', $trimmed);
-        $markers = [
-            'examining',
-            'structuring',
-            'reviewing',
-            'decoding',
-            'analyzing',
-            'analysis',
-            'reasoning',
-            'scope of work',
-            'project',
-            'parameters',
-            "i'm",
-            'i’ve',
-            'i am',
-            'my next step',
-            'i’m',
-        ];
-
-        foreach ($markers as $marker) {
-            if (false !== strpos($lower, $marker)) {
-                return !$has_cyrillic;
+            if ('' !== $text) {
+                return $text;
             }
         }
 
-        return false;
+        return '';
     }
 
     private function get_max_tokens_key($model, $use_openrouter)
