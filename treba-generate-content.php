@@ -1775,7 +1775,6 @@ final class Treba_Generate_Content_Plugin
 
         $first_choice = $body['choices'][0] ?? [];
         $content = $this->extract_choice_content($first_choice);
-        $content = $this->strip_reasoning_preamble($content);
 
         if (empty($content)) {
             $hint = '';
@@ -1895,24 +1894,6 @@ final class Treba_Generate_Content_Plugin
             return $text;
         }
 
-        // Якщо контент порожній, пробуємо додаткові поля Gemini.
-        if (is_array($message)) {
-            foreach (
-                ['reasoning', 'reasoning_details', 'annotations', 'refusal']
-                as $extra_key
-            ) {
-                if (array_key_exists($extra_key, $message)) {
-                    $text_extra = $this->extract_text_from_content(
-                        $message[$extra_key]
-                    );
-
-                    if ('' !== $text_extra) {
-                        return $text_extra;
-                    }
-                }
-            }
-        }
-
         // Деякі відповіді можуть мати content на верхньому рівні choice.
         if (isset($choice['content'])) {
             $fallback = $this->extract_text_from_content($choice['content']);
@@ -1932,79 +1913,6 @@ final class Treba_Generate_Content_Plugin
     {
         $parts = $this->flatten_content_to_strings($content);
         return trim(implode("\n", $parts));
-    }
-
-    /**
-     * Видаляє англомовні "роздуми" моделі на початку відповіді.
-     * Використовує прості евристики (перші особи + відсутність кирилиці).
-     */
-    private function strip_reasoning_preamble($content)
-    {
-        if (!is_string($content)) {
-            return $content;
-        }
-
-        $content = trim($content);
-
-        if ('' === $content) {
-            return $content;
-        }
-
-        $paragraphs = preg_split('/\R{2,}/', $content);
-        $filtered = [];
-        $skipping = true;
-        $reasoning_markers = [
-            "i'm",
-            'i’ve',
-            "i'm",
-            'i am',
-            'my next step',
-            'reviewing',
-            'defining',
-            'decoding',
-            'examining',
-            'analyzing',
-            'analysis',
-            'reasoning',
-            'scope of work',
-            'parameters',
-            'task',
-            'project guidelines',
-        ];
-
-        foreach ($paragraphs as $paragraph) {
-            $trimmed = trim($paragraph);
-
-            if ('' === $trimmed) {
-                continue;
-            }
-
-            if ($skipping) {
-                $lower = strtolower($trimmed);
-                $has_cyrillic = (bool) preg_match(
-                    '/[А-Яа-яЁёІіЇїЄєҐґ]/u',
-                    $trimmed
-                );
-                $has_marker = false;
-
-                foreach ($reasoning_markers as $marker) {
-                    if (false !== strpos($lower, $marker)) {
-                        $has_marker = true;
-                        break;
-                    }
-                }
-
-                if (!$has_cyrillic && $has_marker) {
-                    continue;
-                }
-
-                $skipping = false;
-            }
-
-            $filtered[] = $trimmed;
-        }
-
-        return trim(implode("\n\n", $filtered));
     }
 
     /**
