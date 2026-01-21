@@ -141,47 +141,948 @@ final class Treba_Generate_Content_Plugin
     {
         $id = strtolower((string) $id);
         $id = preg_replace('/[^a-z0-9_-]/', '', $id);
+
         return $id;
+    }
+
+    private function save_templates(array $templates)
+    {
+        $this->templates = $templates;
+        update_option($this->templates_option, $templates);
+    }
+
+    private function get_default_template_key()
+    {
+        $keys = array_keys($this->templates);
+        return $keys ? (string) $keys[0] : '';
     }
 
     public function register_admin_page()
     {
+        if (!$this->is_user_allowed()) {
+            return;
+        }
+
         add_menu_page(
-            'Treba GPT',
-            'Treba GPT',
-            'manage_options',
-            'treba-gpt',
+            __('Treba AI Writer', 'treba-generate-content'),
+            __('Treba AI Writer', 'treba-generate-content'),
+            'read',
+            'treba-generate-content',
             [$this, 'render_admin_page'],
-            'dashicons-admin-generic'
+            'dashicons-edit',
+            58
         );
     }
 
     public function handle_form_submissions()
     {
-        if (
-            !isset($_POST['tgpt_action'], $_POST['tgpt_nonce']) ||
-            !wp_verify_nonce($_POST['tgpt_nonce'], 'tgpt_action_nonce')
-        ) {
+        if (empty($_POST['tgpt_action']) || !$this->is_user_allowed()) {
             return;
         }
 
-        if ('save_settings' === $_POST['tgpt_action']) {
-            $this->save_settings();
-        } elseif ('generate' === $_POST['tgpt_action']) {
-            $this->generate_content();
-        } elseif ('save_template' === $_POST['tgpt_action']) {
-            $this->save_template();
-        } elseif ('delete_template' === $_POST['tgpt_action']) {
-            $this->delete_template();
+        $action = sanitize_key(wp_unslash($_POST['tgpt_action']));
+
+        if ('save_settings' === $action) {
+            $this->handle_settings_save();
+        }
+
+        if ('generate_post' === $action) {
+            $this->handle_post_generation();
+        }
+
+        if ('save_template' === $action) {
+            $this->handle_template_save();
+        }
+
+        if ('delete_template' === $action) {
+            $this->handle_template_delete();
+        }
+
+        if ('export_templates' === $action) {
+            $this->handle_templates_export();
+        }
+
+        if ('import_templates' === $action) {
+            $this->handle_templates_import();
         }
     }
 
-    private function save_settings()
+    public function render_admin_page()
     {
+        if (!$this->is_user_allowed()) {
+            wp_die(
+                esc_html__(
+                    'У вас немає доступу до цієї сторінки.',
+                    'treba-generate-content'
+                )
+            );
+        }
+
+        $current_tab = isset($_GET['tab'])
+            ? sanitize_key(wp_unslash($_GET['tab']))
+            : 'generator';
+        $can_manage_templates = $this->can_manage_templates();
+        $can_manage_settings = current_user_can('manage_options');
+
+        echo '<div class="wrap treba-generate-content">';
+        echo '<h1>' .
+            esc_html__('Treba AI Writer', 'treba-generate-content') .
+            '</h1>';
+        $this->render_notices();
+
+        echo '<h2 class="nav-tab-wrapper">';
+        printf(
+            '<a href="%s" class="nav-tab %s">%s</a>',
+            esc_url(
+                admin_url('admin.php?page=treba-generate-content&tab=generator')
+            ),
+            'generator' === $current_tab ? 'nav-tab-active' : '',
+            esc_html__('Генератор контенту', 'treba-generate-content')
+        );
+        if ($can_manage_templates) {
+            printf(
+                '<a href="%s" class="nav-tab %s">%s</a>',
+                esc_url(
+                    admin_url(
+                        'admin.php?page=treba-generate-content&tab=templates'
+                    )
+                ),
+                'templates' === $current_tab ? 'nav-tab-active' : '',
+                esc_html__('Шаблони', 'treba-generate-content')
+            );
+        }
+        if ($can_manage_settings) {
+            printf(
+                '<a href="%s" class="nav-tab %s">%s</a>',
+                esc_url(
+                    admin_url(
+                        'admin.php?page=treba-generate-content&tab=settings'
+                    )
+                ),
+                'settings' === $current_tab ? 'nav-tab-active' : '',
+                esc_html__('Налаштування доступу', 'treba-generate-content')
+            );
+        }
+        echo '</h2>';
+
+        if ('templates' === $current_tab && $can_manage_templates) {
+            $this->render_templates_form();
+        } elseif ('settings' === $current_tab && $can_manage_settings) {
+            $this->render_settings_form();
+        } else {
+            $this->render_generator_form();
+        }
+
+        echo '</div>';
+    }
+
+    private function render_notices()
+    {
+        foreach ($this->errors as $error) {
+            printf(
+                '<div class="notice notice-error"><p>%s</p></div>',
+                wp_kses_post($error)
+            );
+        }
+
+        foreach ($this->notices as $notice) {
+            printf(
+                '<div class="notice notice-success"><p>%s</p></div>',
+                wp_kses_post($notice)
+            );
+        }
+    }
+
+    private function get_post_type_choices()
+    {
+        $post_types = get_post_types(
+            [
+                'public' => true,
+                'show_ui' => true,
+            ],
+            'objects'
+        );
+
+        $choices = [];
+
+        foreach ($post_types as $type => $object) {
+            if ('attachment' === $type) {
+                continue;
+            }
+
+            $label = '';
+
+            if (!empty($object->labels->singular_name)) {
+                $label = $object->labels->singular_name;
+            } elseif (!empty($object->labels->name)) {
+                $label = $object->labels->name;
+            }
+
+            $choices[$type] = $label ?: $type;
+        }
+
+        if (!$choices && post_type_exists('post')) {
+            $post_object = get_post_type_object('post');
+            $choices['post'] =
+                $post_object && !empty($post_object->labels->singular_name)
+                    ? $post_object->labels->singular_name
+                    : 'post';
+        }
+
+        return $choices;
+    }
+
+    private function get_default_post_type_key(array $post_types)
+    {
+        if (isset($post_types['post']) && post_type_exists('post')) {
+            return 'post';
+        }
+
+        $keys = array_keys($post_types);
+
+        return $keys ? (string) $keys[0] : 'post';
+    }
+
+    private function normalize_post_type($post_type, array $available)
+    {
+        $post_type = sanitize_key((string) $post_type);
+
+        if (isset($available[$post_type]) && post_type_exists($post_type)) {
+            return $post_type;
+        }
+
+        return $this->get_default_post_type_key($available);
+    }
+
+    private function render_generator_form()
+    {
+        $post_types = $this->get_post_type_choices();
+        $selected_post_type = $this->normalize_post_type(
+            $this->get_field_value(
+                'tgpt_post_type',
+                $this->get_default_post_type_key($post_types)
+            ),
+            $post_types
+        );
+        $supports_categories = is_object_in_taxonomy(
+            $selected_post_type,
+            'category'
+        );
+        $categories = $supports_categories
+            ? get_categories(['hide_empty' => false])
+            : [];
+        $has_any_api_key = $this->has_any_api_key();
+        $has_openai_key = $this->has_api_key();
+        $has_openrouter_key = $this->has_openrouter_api_key();
+        $default_template_key = $this->get_default_template_key();
+
+        if ('' === $default_template_key) {
+            $templates_url = esc_url(
+                admin_url('admin.php?page=treba-generate-content&tab=templates')
+            );
+            $message = sprintf(
+                wp_kses(
+                    __(
+                        'Немає доступних шаблонів. Перейдіть на <a href="%s">вкладку «Шаблони»</a>, щоб створити або імпортувати промт.',
+                        'treba-generate-content'
+                    ),
+                    [
+                        'a' => [
+                            'href' => [],
+                        ],
+                    ]
+                ),
+                $templates_url
+            );
+            echo '<div class="notice notice-error"><p>' .
+                $message .
+                '</p></div>';
+            return;
+        }
+        ?>
+		<form method="post">
+			<?php wp_nonce_field('tgpt_generate_post'); ?>
+			<input type="hidden" name="tgpt_action" value="generate_post">
+
+			<table class="form-table" role="presentation">
+				<tbody>
+					<?php if (!$has_any_api_key): ?>
+						<tr>
+							<th scope="row"><?php esc_html_e('Ключ API', 'treba-generate-content'); ?></th>
+							<td>
+								<div class="notice notice-warning inline">
+									<p>
+										<?php
+          $settings_url = esc_url(
+              admin_url('admin.php?page=treba-generate-content&tab=settings')
+          );
+
+          if (current_user_can('manage_options')) {
+              printf(
+                  '%s <a href="%s">%s</a>',
+                  esc_html__(
+                      'Жоден ключ API (OpenAI чи OpenRouter) не налаштований. Додайте ключ у вкладці «Налаштування».',
+                      'treba-generate-content'
+                  ),
+                  $settings_url,
+                  esc_html__('Відкрити налаштування', 'treba-generate-content')
+              );
+          } else {
+              esc_html_e(
+                  'Жоден API-ключ ще не налаштований адміністратором. Зверніться до відповідальної особи.',
+                  'treba-generate-content'
+              );
+          }
+          ?>
+									</p>
+								</div>
+							</td>
+						</tr>
+					<?php else: ?>
+						<tr>
+							<th scope="row"><?php esc_html_e('Ключі API', 'treba-generate-content'); ?></th>
+							<td>
+								<ul class="ul-disc">
+									<li>
+										<?php echo esc_html(
+              sprintf(
+                  'OpenAI: %s',
+                  $has_openai_key
+                      ? esc_html__('налаштовано', 'treba-generate-content')
+                      : esc_html__('нема ключа', 'treba-generate-content')
+              )
+          ); ?>
+									</li>
+									<li>
+										<?php echo esc_html(
+              sprintf(
+                  'OpenRouter: %s',
+                  $has_openrouter_key
+                      ? esc_html__('налаштовано', 'treba-generate-content')
+                      : esc_html__('нема ключа', 'treba-generate-content')
+              )
+          ); ?>
+									</li>
+								</ul>
+								<p class="description"><?php esc_html_e(
+            'Ключі збережено адміністратором і будуть використані автоматично залежно від обраної моделі.',
+            'treba-generate-content'
+        ); ?></p>
+							</td>
+						</tr>
+					<?php endif; ?>
+
+					<tr>
+						<th scope="row"><label for="tgpt_topic"><?php esc_html_e(
+          'Назва статті / тема',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td><input id="tgpt_topic" class="regular-text" type="text" name="tgpt_topic" value="<?php echo esc_attr(
+          $this->get_field_value('tgpt_topic')
+      ); ?>" required></td>
+					</tr>
+
+					<tr>
+						<th scope="row"><label for="tgpt_keywords"><?php esc_html_e(
+          'Ключові слова',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<textarea id="tgpt_keywords" name="tgpt_keywords" rows="4" class="large-text" placeholder="keyword 1, keyword 2&#10;..."><?php echo esc_textarea(
+           $this->get_field_value('tgpt_keywords')
+       ); ?></textarea>
+							<p class="description"><?php esc_html_e(
+           'Через кому або з нового рядка — будуть використані у промті та як теги.',
+           'treba-generate-content'
+       ); ?></p>
+						</td>
+					</tr>
+
+					<tr>
+						<th scope="row"><label for="tgpt_post_type"><?php esc_html_e(
+          'Тип запису',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<select id="tgpt_post_type" name="tgpt_post_type">
+								<?php foreach ($post_types as $type_key => $type_label): ?>
+									<option value="<?php echo esc_attr($type_key); ?>" <?php selected(
+    $selected_post_type,
+    $type_key
+); ?>>
+										<?php echo esc_html($type_label); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+							<p class="description"><?php esc_html_e(
+           'Куди створити запис. Доступні публічні типи з адмінки.',
+           'treba-generate-content'
+       ); ?></p>
+						</td>
+					</tr>
+
+					<?php if ($supports_categories): ?>
+						<tr>
+							<th scope="row"><?php esc_html_e('Категорія', 'treba-generate-content'); ?></th>
+							<td>
+								<select name="tgpt_category" required>
+									<?php foreach ($categories as $category): ?>
+										<option value="<?php echo esc_attr($category->term_id); ?>" <?php selected(
+    (int) $this->get_field_value('tgpt_category', 0),
+    $category->term_id
+); ?>>
+											<?php echo esc_html($category->name); ?>
+										</option>
+									<?php endforeach; ?>
+								</select>
+							</td>
+						</tr>
+					<?php else: ?>
+						<tr>
+							<th scope="row"><?php esc_html_e('Категорія', 'treba-generate-content'); ?></th>
+							<td>
+								<p class="description"><?php esc_html_e(
+            'Для цього типу запису категорії не передбачені.',
+            'treba-generate-content'
+        ); ?></p>
+							</td>
+						</tr>
+					<?php endif; ?>
+
+					<tr>
+						<th scope="row"><?php esc_html_e(
+          'Шаблон / рубрика',
+          'treba-generate-content'
+      ); ?></th>
+						<td>
+							<select name="tgpt_template">
+                                <?php foreach (
+                                    $this->templates
+                                    as $key => $template
+                                ): ?>
+                                    <option value="<?php echo esc_attr(
+                                        $key
+                                    ); ?>" <?php selected(
+    $this->get_field_value('tgpt_template', $default_template_key),
+    $key
+); ?>>
+										<?php echo esc_html($template['label']); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+						</td>
+					</tr>
+
+					<tr>
+						<th scope="row"><?php esc_html_e('Модель', 'treba-generate-content'); ?></th>
+						<td>
+							<select name="tgpt_model">
+								<?php foreach ($this->models as $model_key => $model_label): ?>
+									<option value="<?php echo esc_attr($model_key); ?>" <?php selected(
+    $this->get_field_value('tgpt_model', $this->get_default_model()),
+    $model_key
+); ?>>
+										<?php echo esc_html($model_label); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="tgpt_temperature_gen"><?php esc_html_e(
+          'Температура',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<input
+								id="tgpt_temperature_gen"
+								name="tgpt_temperature"
+								type="number"
+								min="0"
+								max="2"
+								step="0.05"
+								value="<?php echo esc_attr(
+            $this->get_field_value('tgpt_temperature', $this->get_temperature())
+        ); ?>"
+								style="width:120px"
+							>
+							<p class="description"><?php esc_html_e(
+           '0 — детерміновано, 1 — креативніше. Якщо порожнє, використаємо значення з налаштувань.',
+           'treba-generate-content'
+       ); ?></p>
+						</td>
+					</tr>
+
+					<tr>
+						<th scope="row"><?php esc_html_e(
+          'Статус запису',
+          'treba-generate-content'
+      ); ?></th>
+						<td>
+							<select name="tgpt_post_status">
+								<option value="draft" <?php selected(
+            $this->get_field_value('tgpt_post_status', 'draft'),
+            'draft'
+        ); ?>><?php esc_html_e(
+    'Чернетка',
+    'treba-generate-content'
+); ?></option>
+								<option value="pending" <?php selected(
+            $this->get_field_value('tgpt_post_status', 'draft'),
+            'pending'
+        ); ?>><?php esc_html_e(
+    'На перевірці',
+    'treba-generate-content'
+); ?></option>
+								<option value="publish" <?php selected(
+            $this->get_field_value('tgpt_post_status', 'draft'),
+            'publish'
+        ); ?>><?php esc_html_e(
+    'Одразу опублікувати',
+    'treba-generate-content'
+); ?></option>
+							</select>
+						</td>
+					</tr>
+
+					<tr>
+						<th scope="row"><label for="tgpt_word_goal"><?php esc_html_e(
+          'Мінімум слів',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<input id="tgpt_word_goal" type="number" name="tgpt_word_goal" value="<?php echo esc_attr(
+           $this->get_field_value('tgpt_word_goal', 1200)
+       ); ?>" min="300" step="100">
+							<p class="description"><?php esc_html_e(
+           'AI отримає підказку щодо довжини матеріалу.',
+           'treba-generate-content'
+       ); ?></p>
+						</td>
+					</tr>
+
+					<tr>
+						<th scope="row"><label for="tgpt_extra"><?php esc_html_e(
+          'Додаткові інструкції',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<textarea id="tgpt_extra" name="tgpt_extra" rows="4" class="large-text" placeholder="<?php esc_attr_e(
+           'Наприклад: додай CTA, перелічуй списки, додай таблицю тощо.',
+           'treba-generate-content'
+       ); ?>"><?php echo esc_textarea(
+    $this->get_field_value('tgpt_extra')
+); ?></textarea>
+						</td>
+					</tr>
+
+					<tr>
+						<th scope="row"><?php esc_html_e(
+          'Мова контенту',
+          'treba-generate-content'
+      ); ?></th>
+						<td>
+							<select name="tgpt_language">
+								<option value="uk" <?php selected(
+            $this->get_field_value('tgpt_language', 'uk'),
+            'uk'
+        ); ?>><?php esc_html_e(
+    'Українська',
+    'treba-generate-content'
+); ?></option>
+								<option value="en" <?php selected(
+            $this->get_field_value('tgpt_language', 'uk'),
+            'en'
+        ); ?>><?php esc_html_e('English', 'treba-generate-content'); ?></option>
+							</select>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+
+			<?php submit_button(
+       __('Згенерувати та створити запис', 'treba-generate-content')
+   ); ?>
+		</form>
+		<?php
+    }
+
+    private function render_templates_form()
+    {
+        if (!$this->can_manage_templates()) {
+            return;
+        }
+
+        $templates = $this->templates;
+        $editing_template_id = '';
+        $editing_template = [
+            'label' => '',
+            'prompt' => '',
+        ];
+
+        if (!empty($_GET['template'])) {
+            $candidate = $this->sanitize_template_id(
+                wp_unslash($_GET['template'])
+            );
+
+            if ($candidate && isset($templates[$candidate])) {
+                $editing_template_id = $candidate;
+                $editing_template = $templates[$candidate];
+            }
+        }
+
+        $form_heading = $editing_template_id
+            ? esc_html__('Редагувати шаблон', 'treba-generate-content')
+            : esc_html__('Створити новий шаблон', 'treba-generate-content');
+        ?>
+		<div class="card">
+			<h2><?php echo $form_heading; ?></h2>
+			<p><?php esc_html_e(
+       'Використовуйте змінні {topic}, {keywords}. Сервіс автоматично додасть {word_goal} із налаштувань форми.',
+       'treba-generate-content'
+   ); ?></p>
+			<form method="post">
+				<?php wp_nonce_field('tgpt_manage_templates'); ?>
+				<input type="hidden" name="tgpt_action" value="save_template">
+				<input type="hidden" name="tgpt_original_id" value="<?php echo esc_attr(
+        $editing_template_id
+    ); ?>">
+
+				<table class="form-table" role="presentation">
+					<tbody>
+						<tr>
+							<th scope="row"><label for="tgpt_template_label"><?php esc_html_e(
+           'Назва шаблону',
+           'treba-generate-content'
+       ); ?></label></th>
+							<td>
+								<input type="text" class="regular-text" id="tgpt_template_label" name="tgpt_template_label" value="<?php echo esc_attr(
+            $editing_template['label']
+        ); ?>" required>
+								<p class="description"><?php esc_html_e(
+            'Цю назву побачать користувачі у випадаючому списку генератора.',
+            'treba-generate-content'
+        ); ?></p>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><label for="tgpt_template_id"><?php esc_html_e(
+           'Системний ключ',
+           'treba-generate-content'
+       ); ?></label></th>
+							<td>
+                                <input type="text" class="regular-text" id="tgpt_template_id" name="tgpt_template_id" value="<?php echo esc_attr(
+                                    $editing_template_id
+                                ); ?>" placeholder="naprklad_template" required>
+								<p class="description"><?php esc_html_e(
+            'Лише латиниця, цифри, дефіси та підкреслення. Використовується у внутрішніх ідентифікаторах.',
+            'treba-generate-content'
+        ); ?></p>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><label for="tgpt_template_prompt"><?php esc_html_e(
+           'Промт для ChatGPT',
+           'treba-generate-content'
+       ); ?></label></th>
+							<td>
+								<textarea class="large-text" id="tgpt_template_prompt" name="tgpt_template_prompt" rows="14" required><?php echo esc_textarea(
+            $editing_template['prompt']
+        ); ?></textarea>
+								<p class="description"><?php esc_html_e(
+            'Опишіть структуру статті, побажання до тону, списків тощо.',
+            'treba-generate-content'
+        ); ?></p>
+							</td>
+						</tr>
+					</tbody>
+				</table>
+
+				<?php submit_button(
+        $editing_template_id
+            ? esc_html__('Оновити шаблон', 'treba-generate-content')
+            : esc_html__('Створити шаблон', 'treba-generate-content')
+    ); ?>
+			</form>
+		</div>
+
+		<div class="card">
+			<h2><?php esc_html_e(
+       'Експорт та імпорт шаблонів',
+       'treba-generate-content'
+   ); ?></h2>
+			<div class="tgpt-templates-import-export" style="display:flex;flex-wrap:wrap;gap:24px;">
+				<div style="flex:1 1 280px;">
+					<h3><?php esc_html_e('Експорт', 'treba-generate-content'); ?></h3>
+					<p><?php esc_html_e(
+         'Завантажте JSON-файл з усіма поточними шаблонами й використовуйте його як резервну копію.',
+         'treba-generate-content'
+     ); ?></p>
+					<form method="post">
+						<?php wp_nonce_field('tgpt_export_templates'); ?>
+						<input type="hidden" name="tgpt_action" value="export_templates">
+						<?php submit_button(
+          esc_html__('Завантажити JSON', 'treba-generate-content'),
+          'secondary',
+          'submit',
+          false
+      ); ?>
+					</form>
+				</div>
+				<div style="flex:1 1 280px;">
+					<h3><?php esc_html_e('Імпорт', 'treba-generate-content'); ?></h3>
+					<p><?php esc_html_e(
+         'Імпортуйте файл, створений цією ж кнопкою експорту. Нові шаблони додадуться або повністю замінять поточні — на ваш вибір.',
+         'treba-generate-content'
+     ); ?></p>
+					<form method="post" enctype="multipart/form-data">
+						<?php wp_nonce_field('tgpt_import_templates'); ?>
+						<input type="hidden" name="tgpt_action" value="import_templates">
+						<input type="file" name="tgpt_templates_file" accept=".json,application/json" required>
+						<p>
+							<label>
+								<input type="checkbox" name="tgpt_import_replace" value="1">
+								<?php esc_html_e(
+            'Очистити поточні шаблони перед імпортом',
+            'treba-generate-content'
+        ); ?>
+							</label>
+						</p>
+						<?php submit_button(
+          esc_html__('Імпортувати шаблони', 'treba-generate-content')
+      ); ?>
+					</form>
+				</div>
+			</div>
+		</div>
+
+		<h2><?php esc_html_e('Усі шаблони', 'treba-generate-content'); ?></h2>
+		<table class="widefat fixed striped">
+			<thead>
+				<tr>
+					<th><?php esc_html_e('Назва', 'treba-generate-content'); ?></th>
+					<th><?php esc_html_e('Ключ', 'treba-generate-content'); ?></th>
+					<th><?php esc_html_e('Дії', 'treba-generate-content'); ?></th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php if (empty($templates)): ?>
+					<tr>
+						<td colspan="3">
+							<?php esc_html_e(
+           'Поки що немає жодного шаблону. Створіть новий або імпортуйте існуючий JSON.',
+           'treba-generate-content'
+       ); ?>
+						</td>
+					</tr>
+				<?php else: ?>
+					<?php foreach ($templates as $template_id => $template_data): ?>
+						<tr>
+							<td><?php echo esc_html($template_data['label']); ?></td>
+							<td><code><?php echo esc_html($template_id); ?></code></td>
+							<td>
+								<a class="button button-secondary" href="<?php echo esc_url(
+            add_query_arg(
+                [
+                    'page' => 'treba-generate-content',
+                    'tab' => 'templates',
+                    'template' => $template_id,
+                ],
+                admin_url('admin.php')
+            )
+        ); ?>"><?php esc_html_e('Редагувати', 'treba-generate-content'); ?></a>
+								<form method="post" style="display:inline-block;margin-left:8px;">
+									<?php wp_nonce_field('tgpt_manage_templates'); ?>
+									<input type="hidden" name="tgpt_action" value="delete_template">
+									<input type="hidden" name="tgpt_template_id" value="<?php echo esc_attr(
+             $template_id
+         ); ?>">
+									<?php submit_button(
+             esc_html__('Видалити', 'treba-generate-content'),
+             'delete',
+             'submit',
+             false,
+             [
+                 'onclick' =>
+                     "return confirm('" .
+                     esc_js(
+                         __('Видалити цей шаблон?', 'treba-generate-content')
+                     ) .
+                     "');",
+             ]
+         ); ?>
+								</form>
+							</td>
+						</tr>
+					<?php endforeach; ?>
+				<?php endif; ?>
+			</tbody>
+		</table>
+		<?php
+    }
+
+    private function render_settings_form()
+    {
+        $allowed_users = (array) get_option($this->allowed_users_option, []);
+        $has_openai_key = $this->has_api_key();
+        $has_openrouter_key = $this->has_openrouter_api_key();
+        $users = get_users([
+            'orderby' => 'display_name',
+            'order' => 'ASC',
+            'fields' => ['ID', 'display_name', 'user_login'],
+        ]);
+        ?>
+		<form method="post">
+			<?php wp_nonce_field('tgpt_save_settings'); ?>
+			<input type="hidden" name="tgpt_action" value="save_settings">
+
+			<table class="form-table" role="presentation">
+				<tbody>
+					<tr>
+						<th scope="row"><label for="tgpt_api_key"><?php esc_html_e(
+          'OpenAI API ключ',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<input id="tgpt_api_key" class="regular-text" type="password" name="tgpt_api_key" value="" placeholder="sk-..." autocomplete="off">
+							<?php if ($has_openai_key): ?>
+								<p class="description"><?php esc_html_e(
+            'Ключ уже збережений. Залиште поле порожнім, щоб не змінювати.',
+            'treba-generate-content'
+        ); ?></p>
+								<label>
+									<input type="checkbox" name="tgpt_clear_api_key" value="1">
+									<?php esc_html_e('Видалити збережений ключ', 'treba-generate-content'); ?>
+								</label>
+							<?php else: ?>
+								<p class="description"><?php esc_html_e(
+            'Введіть ключ один раз, він буде збережений у зашифрованому вигляді.',
+            'treba-generate-content'
+        ); ?></p>
+							<?php endif; ?>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="tgpt_openrouter_api_key"><?php esc_html_e(
+          'OpenRouter API ключ',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<input id="tgpt_openrouter_api_key" class="regular-text" type="password" name="tgpt_openrouter_api_key" value="" placeholder="sk-or-..." autocomplete="off">
+							<?php if ($has_openrouter_key): ?>
+								<p class="description"><?php esc_html_e(
+            'Ключ OpenRouter уже збережений. Залиште поле порожнім, щоб не змінювати.',
+            'treba-generate-content'
+        ); ?></p>
+								<label>
+									<input type="checkbox" name="tgpt_clear_openrouter_api_key" value="1">
+									<?php esc_html_e(
+             'Видалити збережений ключ OpenRouter',
+             'treba-generate-content'
+         ); ?>
+								</label>
+							<?php else: ?>
+								<p class="description"><?php esc_html_e(
+            'Введіть ключ OpenRouter один раз, він буде збережений у зашифрованому вигляді.',
+            'treba-generate-content'
+        ); ?></p>
+							<?php endif; ?>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><?php esc_html_e(
+          'Доступ до генератора',
+          'treba-generate-content'
+      ); ?></th>
+						<td>
+							<select name="tgpt_allowed_users[]" multiple size="6" style="min-width:300px;">
+								<?php foreach ($users as $user): ?>
+									<option value="<?php echo esc_attr($user->ID); ?>" <?php selected(
+    in_array($user->ID, array_map('intval', $allowed_users), true)
+); ?>>
+										<?php echo esc_html(
+              sprintf('%s (%s)', $user->display_name, $user->user_login)
+          ); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+							<p class="description"><?php esc_html_e(
+           'Адміністратори мають доступ завжди, тут можна додати редакторів/копірайтерів.',
+           'treba-generate-content'
+       ); ?></p>
+						</td>
+					</tr>
+
+					<tr>
+						<th scope="row"><?php esc_html_e(
+          'Модель за замовчуванням',
+          'treba-generate-content'
+      ); ?></th>
+						<td>
+							<select name="tgpt_default_model">
+								<?php foreach ($this->models as $model_key => $model_label): ?>
+									<option value="<?php echo esc_attr($model_key); ?>" <?php selected(
+    $this->get_default_model(),
+    $model_key
+); ?>>
+										<?php echo esc_html($model_label); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="tgpt_temperature"><?php esc_html_e(
+          'Температура відповіді',
+          'treba-generate-content'
+      ); ?></label></th>
+						<td>
+							<input
+								id="tgpt_temperature"
+								name="tgpt_temperature"
+								type="number"
+								min="0"
+								max="2"
+								step="0.05"
+								value="<?php echo esc_attr($this->get_temperature()); ?>"
+								style="width:120px"
+							>
+							<p class="description"><?php esc_html_e(
+           '0 — максимально детерміновано, 1 — креативніше (OpenRouter може ігнорувати значення для окремих моделей).',
+           'treba-generate-content'
+       ); ?></p>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+
+			<?php submit_button(__('Зберегти налаштування', 'treba-generate-content')); ?>
+		</form>
+		<?php
+    }
+
+    private function handle_settings_save()
+    {
+        if (!$this->can_manage_templates()) {
+            return;
+        }
+
+        check_admin_referer('tgpt_save_settings');
+
         $api_key_input = isset($_POST['tgpt_api_key'])
-            ? wp_unslash($_POST['tgpt_api_key'])
+            ? trim(sanitize_text_field(wp_unslash($_POST['tgpt_api_key'])))
             : '';
         $should_clear_key = !empty($_POST['tgpt_clear_api_key']);
+        $openrouter_key_input = isset($_POST['tgpt_openrouter_api_key'])
+            ? trim(
+                sanitize_text_field(
+                    wp_unslash($_POST['tgpt_openrouter_api_key'])
+                )
+            )
+            : '';
+        $should_clear_openrouter_key = !empty(
+            $_POST['tgpt_clear_openrouter_api_key']
+        );
 
         if ($should_clear_key) {
             delete_option($this->api_key_option);
@@ -191,9 +1092,10 @@ final class Treba_Generate_Content_Plugin
                 'treba-generate-content'
             );
         } elseif ('' !== $api_key_input) {
-            $encrypted = $this->encrypt_api_key($api_key_input);
-            if ($encrypted) {
-                update_option($this->api_key_option, $encrypted);
+            $encrypted_key = $this->encrypt_api_key($api_key_input);
+
+            if ($encrypted_key) {
+                update_option($this->api_key_option, $encrypted_key);
                 $this->cached_api_key = $api_key_input;
                 $this->notices[] = esc_html__(
                     'API-ключ оновлено.',
@@ -207,13 +1109,6 @@ final class Treba_Generate_Content_Plugin
             }
         }
 
-        $openrouter_key_input = isset($_POST['tgpt_openrouter_api_key'])
-            ? wp_unslash($_POST['tgpt_openrouter_api_key'])
-            : '';
-        $should_clear_openrouter_key = !empty(
-            $_POST['tgpt_clear_openrouter_api_key']
-        );
-
         if ($should_clear_openrouter_key) {
             delete_option($this->openrouter_api_key_option);
             $this->cached_openrouter_api_key = null;
@@ -225,6 +1120,7 @@ final class Treba_Generate_Content_Plugin
             $encrypted_openrouter_key = $this->encrypt_api_key(
                 $openrouter_key_input
             );
+
             if ($encrypted_openrouter_key) {
                 update_option(
                     $this->openrouter_api_key_option,
@@ -243,28 +1139,38 @@ final class Treba_Generate_Content_Plugin
             }
         }
 
-        if (isset($_POST['tgpt_default_model'])) {
-            $model = sanitize_text_field($_POST['tgpt_default_model']);
-            if (isset($this->models[$model])) {
-                update_option($this->default_model_option, $model);
-            }
+        $allowed_users = isset($_POST['tgpt_allowed_users'])
+            ? array_map(
+                'intval',
+                (array) wp_unslash($_POST['tgpt_allowed_users'])
+            )
+            : [];
+        update_option(
+            $this->allowed_users_option,
+            array_values(array_unique($allowed_users))
+        );
+
+        $default_model = isset($_POST['tgpt_default_model'])
+            ? sanitize_text_field(wp_unslash($_POST['tgpt_default_model']))
+            : 'gpt-4o-mini';
+        if (isset($this->models[$default_model])) {
+            update_option($this->default_model_option, $default_model);
         }
 
-        if (isset($_POST['tgpt_temperature'])) {
-            $temp = (float) $_POST['tgpt_temperature'];
-            if ($temp < 0) {
-                $temp = 0.0;
-            } elseif ($temp > 2) {
-                $temp = 2.0;
-            }
-            update_option($this->temperature_option, $temp);
-        }
+        $temperature_input = isset($_POST['tgpt_temperature'])
+            ? sanitize_text_field(wp_unslash($_POST['tgpt_temperature']))
+            : '';
 
-        if (isset($_POST['tgpt_allowed_users'])) {
-            $allowed = $this->prepare_list_from_textarea(
-                $_POST['tgpt_allowed_users']
-            );
-            update_option($this->allowed_users_option, $allowed);
+        if (is_numeric($temperature_input)) {
+            $temperature = (float) $temperature_input;
+
+            if ($temperature < 0) {
+                $temperature = 0.0;
+            } elseif ($temperature > 2) {
+                $temperature = 2.0;
+            }
+
+            update_option($this->temperature_option, $temperature);
         }
 
         $this->notices[] = esc_html__(
@@ -273,46 +1179,365 @@ final class Treba_Generate_Content_Plugin
         );
     }
 
-    private function generate_content()
+    private function handle_template_save()
     {
-        $title = sanitize_text_field($_POST['tgpt_title'] ?? '');
-        $keywords_raw = $_POST['tgpt_keywords'] ?? '';
-        $word_goal = (int) ($_POST['tgpt_word_goal'] ?? 0);
-        $model = sanitize_text_field($_POST['tgpt_model'] ?? '');
-        $template_key = sanitize_text_field($_POST['tgpt_template'] ?? '');
-        $language = sanitize_text_field($_POST['tgpt_language'] ?? 'uk');
-        $extra = sanitize_textarea_field($_POST['tgpt_extra'] ?? '');
+        if (!$this->can_manage_templates()) {
+            return;
+        }
 
-        if ('' === $title) {
+        check_admin_referer('tgpt_manage_templates');
+
+        $label = isset($_POST['tgpt_template_label'])
+            ? sanitize_text_field(wp_unslash($_POST['tgpt_template_label']))
+            : '';
+        $template_id_input = isset($_POST['tgpt_template_id'])
+            ? wp_unslash($_POST['tgpt_template_id'])
+            : '';
+        $template_id = $this->sanitize_template_id($template_id_input);
+        $original_id = isset($_POST['tgpt_original_id'])
+            ? $this->sanitize_template_id(
+                wp_unslash($_POST['tgpt_original_id'])
+            )
+            : '';
+        $prompt = isset($_POST['tgpt_template_prompt'])
+            ? trim(
+                sanitize_textarea_field(
+                    wp_unslash($_POST['tgpt_template_prompt'])
+                )
+            )
+            : '';
+
+        if ('' === $label) {
             $this->errors[] = esc_html__(
-                'Будь ласка, вкажіть тему.',
+                'Назва шаблону обов’язкова.',
                 'treba-generate-content'
             );
             return;
+        }
+
+        if ('' === $template_id) {
+            $template_id = $this->sanitize_template_id(sanitize_title($label));
+        }
+
+        if ('' === $template_id) {
+            $this->errors[] = esc_html__(
+                'Задайте коректний системний ключ (латиниця, цифри, - або _).',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        if ('' === $prompt) {
+            $this->errors[] = esc_html__(
+                'Промт для шаблону не може бути порожнім.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        $templates = $this->templates;
+
+        if (
+            $original_id &&
+            $original_id !== $template_id &&
+            isset($templates[$template_id])
+        ) {
+            $this->errors[] = esc_html__(
+                'Шаблон з таким ключем уже існує.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        if (!$original_id && isset($templates[$template_id])) {
+            $this->errors[] = esc_html__(
+                'Шаблон з таким ключем уже існує.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        if ($original_id && isset($templates[$original_id])) {
+            unset($templates[$original_id]);
+        }
+
+        $templates[$template_id] = [
+            'label' => $label,
+            'prompt' => $prompt,
+        ];
+
+        $this->save_templates($templates);
+        $this->notices[] = esc_html__(
+            'Шаблон збережено.',
+            'treba-generate-content'
+        );
+    }
+
+    private function handle_template_delete()
+    {
+        if (!$this->can_manage_templates()) {
+            return;
+        }
+
+        check_admin_referer('tgpt_manage_templates');
+
+        $template_id = isset($_POST['tgpt_template_id'])
+            ? $this->sanitize_template_id(
+                wp_unslash($_POST['tgpt_template_id'])
+            )
+            : '';
+
+        if ('' === $template_id || !isset($this->templates[$template_id])) {
+            $this->errors[] = esc_html__(
+                'Шаблон не знайдено.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        $templates = $this->templates;
+        unset($templates[$template_id]);
+        $this->save_templates($templates);
+
+        $this->notices[] = esc_html__(
+            'Шаблон видалено.',
+            'treba-generate-content'
+        );
+    }
+
+    private function handle_templates_export()
+    {
+        if (!$this->can_manage_templates()) {
+            return;
+        }
+
+        check_admin_referer('tgpt_export_templates');
+
+        $export_data = [];
+
+        foreach ($this->templates as $id => $template) {
+            $export_data[] = [
+                'id' => $id,
+                'label' => $template['label'],
+                'prompt' => $template['prompt'],
+            ];
+        }
+
+        $json = wp_json_encode(
+            $export_data,
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+
+        if (false === $json) {
+            $this->errors[] = esc_html__(
+                'Не вдалося сформувати файл експорту. Спробуйте ще раз.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        nocache_headers();
+        header('Content-Type: application/json; charset=utf-8');
+        header(
+            'Content-Disposition: attachment; filename="treba-templates-' .
+                gmdate('Y-m-d') .
+                '.json"'
+        );
+
+        echo $json;
+        exit();
+    }
+
+    private function handle_templates_import()
+    {
+        if (!$this->can_manage_templates()) {
+            return;
+        }
+
+        check_admin_referer('tgpt_import_templates');
+
+        if (
+            empty($_FILES['tgpt_templates_file']) ||
+            !isset($_FILES['tgpt_templates_file']['tmp_name'])
+        ) {
+            $this->errors[] = esc_html__(
+                'Файл із шаблонами не завантажено.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        $file = $_FILES['tgpt_templates_file'];
+
+        if (
+            (int) ($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK ||
+            !is_uploaded_file($file['tmp_name'])
+        ) {
+            $this->errors[] = esc_html__(
+                'Помилка завантаження файлу. Спробуйте ще раз.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        $raw = file_get_contents($file['tmp_name']);
+
+        if (false === $raw) {
+            $this->errors[] = esc_html__(
+                'Не вдалося прочитати файл із шаблонами.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        $decoded = json_decode($raw, true);
+
+        if (!is_array($decoded)) {
+            $this->errors[] = esc_html__(
+                'Файл має хибний формат. Очікується JSON-масив.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        $imported = [];
+
+        foreach ($decoded as $maybe_id => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $raw_id = $entry['id'] ?? (is_string($maybe_id) ? $maybe_id : '');
+            $template_id = $this->sanitize_template_id($raw_id);
+            $label = isset($entry['label'])
+                ? sanitize_text_field($entry['label'])
+                : '';
+            $prompt = isset($entry['prompt'])
+                ? sanitize_textarea_field($entry['prompt'])
+                : '';
+
+            if ('' === $template_id || '' === $label || '' === trim($prompt)) {
+                continue;
+            }
+
+            $imported[$template_id] = [
+                'label' => $label,
+                'prompt' => $prompt,
+            ];
+        }
+
+        if (empty($imported)) {
+            $this->errors[] = esc_html__(
+                'У файлі не знайдено жодного валідного шаблону.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        $replace_existing = !empty($_POST['tgpt_import_replace']);
+        $templates = $replace_existing ? [] : $this->templates;
+
+        foreach ($imported as $id => $template) {
+            $templates[$id] = $template;
+        }
+
+        $this->save_templates($templates);
+
+        $this->notices[] = sprintf(
+            esc_html__(
+                'Імпорт завершено: додано/оновлено %d шаблон(ів).',
+                'treba-generate-content'
+            ),
+            count($imported)
+        );
+    }
+
+    private function handle_post_generation()
+    {
+        check_admin_referer('tgpt_generate_post');
+
+        $post_types = $this->get_post_type_choices();
+        $post_type = isset($_POST['tgpt_post_type'])
+            ? wp_unslash($_POST['tgpt_post_type'])
+            : $this->get_default_post_type_key($post_types);
+        $post_type = $this->normalize_post_type($post_type, $post_types);
+
+        $title = isset($_POST['tgpt_topic'])
+            ? sanitize_text_field(wp_unslash($_POST['tgpt_topic']))
+            : '';
+        $keywords = $this->prepare_list_from_textarea(
+            $_POST['tgpt_keywords'] ?? ''
+        );
+        $keywords_string = $keywords ? implode(', ', $keywords) : '';
+        $category = isset($_POST['tgpt_category'])
+            ? absint($_POST['tgpt_category'])
+            : 0;
+        $template = isset($_POST['tgpt_template'])
+            ? sanitize_key(wp_unslash($_POST['tgpt_template']))
+            : $this->get_default_template_key();
+        $model = isset($_POST['tgpt_model'])
+            ? sanitize_text_field(wp_unslash($_POST['tgpt_model']))
+            : $this->get_default_model();
+        $post_status = isset($_POST['tgpt_post_status'])
+            ? sanitize_key(wp_unslash($_POST['tgpt_post_status']))
+            : 'draft';
+        $word_goal = isset($_POST['tgpt_word_goal'])
+            ? absint($_POST['tgpt_word_goal'])
+            : 1200;
+        $extra = isset($_POST['tgpt_extra'])
+            ? sanitize_textarea_field(wp_unslash($_POST['tgpt_extra']))
+            : '';
+        $language = isset($_POST['tgpt_language'])
+            ? sanitize_key(wp_unslash($_POST['tgpt_language']))
+            : 'uk';
+        $temperature_input = isset($_POST['tgpt_temperature'])
+            ? sanitize_text_field(wp_unslash($_POST['tgpt_temperature']))
+            : '';
+        $supports_categories = is_object_in_taxonomy($post_type, 'category');
+
+        if (empty($title)) {
+            $this->errors[] = esc_html__(
+                'Назва статті обовʼязкова.',
+                'treba-generate-content'
+            );
+            return;
+        }
+
+        if (!isset($this->templates[$template])) {
+            $template = $this->get_default_template_key();
+
+            if (!$template || !isset($this->templates[$template])) {
+                $this->errors[] = esc_html__(
+                    'Немає доступних шаблонів. Додайте їх на вкладці «Шаблони».',
+                    'treba-generate-content'
+                );
+                return;
+            }
         }
 
         if (!isset($this->models[$model])) {
-            $this->errors[] = esc_html__(
-                'Недійсна модель.',
-                'treba-generate-content'
-            );
-            return;
+            $model = $this->get_default_model();
         }
 
-        if (!isset($this->templates[$template_key])) {
-            $this->errors[] = esc_html__(
-                'Будь ласка, оберіть шаблон.',
-                'treba-generate-content'
-            );
-            return;
+        if (!in_array($post_status, ['draft', 'pending', 'publish'], true)) {
+            $post_status = 'draft';
         }
+
+        $prompt = $this->build_prompt(
+            $title,
+            $keywords,
+            $template,
+            $word_goal,
+            $extra,
+            $language
+        );
 
         $is_openrouter = $this->is_openrouter_model($model);
         $api_key = $is_openrouter
             ? $this->get_saved_openrouter_api_key()
             : $this->get_saved_api_key();
 
-        if ('' === $api_key) {
+        if (empty($api_key)) {
             $this->errors[] = $is_openrouter
                 ? esc_html__(
                     'Ключ OpenRouter API не налаштований. Додайте його у вкладці «Налаштування».',
@@ -325,20 +1550,26 @@ final class Treba_Generate_Content_Plugin
             return;
         }
 
-        $keywords = $this->prepare_list_from_textarea($keywords_raw);
-        $prompt = $this->build_prompt(
-            $title,
-            $keywords,
-            $word_goal,
-            $template_key,
-            $extra,
-            $language
-        );
+        if ('' === $temperature_input) {
+            $temperature = $this->get_temperature();
+        } elseif (is_numeric($temperature_input)) {
+            $temperature = (float) $temperature_input;
+            if ($temperature < 0) {
+                $temperature = 0.0;
+            } elseif ($temperature > 2) {
+                $temperature = 2.0;
+            }
+        } else {
+            $temperature = $this->get_temperature();
+        }
 
-        $temperature = $this->get_temperature();
+        // GPT-5 моделі наразі не приймають temperature — використовуємо значення за замовчуванням API.
+        if ($this->is_gpt5_model($model)) {
+            $temperature = null;
+        }
         $max_tokens = $this->calculate_max_tokens($word_goal);
 
-        $content_markdown = $this->request_openai(
+        $content = $this->request_openai(
             $api_key,
             $model,
             $prompt,
@@ -347,84 +1578,67 @@ final class Treba_Generate_Content_Plugin
             $max_tokens
         );
 
-        if ('' === $content_markdown) {
+        if (empty($content)) {
             return;
         }
 
-        $content_html = $this->convert_markdown_to_html($content_markdown);
+        $content = $this->convert_markdown_to_html($content);
 
-        $post_id = wp_insert_post([
-            'post_title' => $title,
-            'post_content' => $content_html,
-            'post_status' => 'draft',
-            'post_type' => 'post',
-        ]);
-
-        if (is_wp_error($post_id)) {
-            $this->errors[] = sprintf(
-                '%s %s',
-                esc_html__(
-                    'Не вдалося створити статтю:',
-                    'treba-generate-content'
-                ),
-                esc_html($post_id->get_error_message())
-            );
-        } else {
-            $this->notices[] = sprintf(
-                '%s <a href="%s">%s</a>',
-                esc_html__('Статтю створено:', 'treba-generate-content'),
-                esc_url(get_edit_post_link($post_id)),
-                esc_html__('Редагувати', 'treba-generate-content')
-            );
-            $this->reset_form = true;
-        }
-    }
-
-    private function save_template()
-    {
-        $id = sanitize_text_field($_POST['tgpt_template_id'] ?? '');
-        $label = sanitize_text_field($_POST['tgpt_template_label'] ?? '');
-        $prompt = sanitize_textarea_field($_POST['tgpt_template_prompt'] ?? '');
-
-        if ('' === $id || '' === $label || '' === trim($prompt)) {
+        if ('' === trim($content)) {
             $this->errors[] = esc_html__(
-                'Всі поля шаблону обов’язкові.',
+                'Не вдалося перетворити контент у HTML.',
                 'treba-generate-content'
             );
             return;
         }
 
-        $id = $this->sanitize_template_id($id);
-        $this->templates[$id] = [
-            'label' => $label,
-            'prompt' => $prompt,
+        $post_data = [
+            'post_title' => $title,
+            'post_content' => wp_kses_post($content),
+            'post_status' => $post_status,
+            'post_author' => get_current_user_id(),
+            'post_type' => $post_type,
         ];
 
-        update_option($this->templates_option, $this->templates);
-        $this->notices[] = esc_html__(
-            'Шаблон збережено.',
-            'treba-generate-content'
-        );
-    }
+        if ($supports_categories) {
+            $post_data['post_category'] = $category ? [$category] : [];
+        }
 
-    private function delete_template()
-    {
-        $id = sanitize_text_field($_POST['tgpt_template_id'] ?? '');
-        if (isset($this->templates[$id])) {
-            unset($this->templates[$id]);
-            update_option($this->templates_option, $this->templates);
-            $this->notices[] = esc_html__(
-                'Шаблон видалено.',
+        $post_id = wp_insert_post($post_data, true);
+
+        if (is_wp_error($post_id)) {
+            $this->errors[] = esc_html__(
+                'Не вдалося створити запис. Спробуйте пізніше.',
                 'treba-generate-content'
             );
+            return;
         }
+
+        if ($keywords) {
+            update_post_meta($post_id, '_treba_ai_keywords', $keywords_string);
+        }
+        update_post_meta($post_id, '_crb_post_title', $title);
+        update_post_meta($post_id, '_crb_post_keywords', $keywords_string);
+        update_post_meta($post_id, '_treba_ai_template', $template);
+        update_post_meta($post_id, '_treba_ai_model', $model);
+
+        $this->notices[] = sprintf(
+            '%s <a href="%s" target="_blank">%s</a> · <a href="%s">%s</a>',
+            esc_html__('Статтю створено.', 'treba-generate-content'),
+            esc_url(get_permalink($post_id)),
+            esc_html__('Подивитись', 'treba-generate-content'),
+            esc_url(get_edit_post_link($post_id)),
+            esc_html__('Редагувати', 'treba-generate-content')
+        );
+
+        $this->reset_form = true;
     }
 
     private function build_prompt(
         $title,
         $keywords,
-        $word_goal,
         $template_key,
+        $word_goal,
         $extra,
         $language
     ) {
@@ -489,10 +1703,10 @@ final class Treba_Generate_Content_Plugin
             ],
         ];
 
-        // Для Gemini 3 Pro Preview просимо повертати лише фінальну відповідь у контенті.
+        // Для Gemini 3 Pro Preview просимо повертати лише фінальну відповідь.
         if ($use_openrouter && 'google/gemini-3-pro-preview' === $model) {
             $payload['messages'][0]['content'] .=
-                ' IMPORTANT: Respond ONLY with the article content in Ukrainian. Do not include your internal thoughts, reasoning, or analysis in the response.';
+                ' Respond only with the final answer. Do not include any reasoning or analysis.';
         }
 
         // Деякі моделі (наприклад, search-preview або GPT-5) не приймають temperature.
@@ -569,107 +1783,36 @@ final class Treba_Generate_Content_Plugin
         $content = $this->extract_choice_content($first_choice, $model);
 
         if (empty($content)) {
-            $this->errors[] = esc_html__(
-                $use_openrouter
-                    ? 'OpenRouter не повернув контент.'
-                    : 'OpenAI не повернув контент.',
-                'treba-generate-content'
-            );
+            $hint = '';
+
+            if (is_array($first_choice)) {
+                $top_keys = implode(', ', array_keys($first_choice));
+                $message = isset($first_choice['message'])
+                    ? (is_array($first_choice['message'])
+                        ? implode(', ', array_keys($first_choice['message']))
+                        : 'message:scalar')
+                    : 'message:missing';
+                $hint = sprintf(
+                    ' (structure: choice keys [%s]; message keys [%s])',
+                    $top_keys,
+                    $message
+                );
+            }
+
+            $this->errors[] =
+                ($use_openrouter
+                    ? esc_html__(
+                        'OpenRouter не повернув контент',
+                        'treba-generate-content'
+                    )
+                    : esc_html__(
+                        'OpenAI не повернув контент',
+                        'treba-generate-content'
+                    )) . esc_html($hint);
             return '';
         }
 
         return trim($content);
-    }
-
-    private function extract_choice_content($choice, $model = '')
-    {
-        if (!is_array($choice)) {
-            return is_string($choice) ? trim($choice) : '';
-        }
-
-        $message = $choice['message'] ?? [];
-        $content = $message['content'] ?? ($choice['content'] ?? '');
-
-        // Якщо контент — це масив частин (OpenRouter style)
-        if (is_array($content)) {
-            $text_parts = [];
-            foreach ($content as $part) {
-                if (!is_array($part)) {
-                    if (is_string($part)) {
-                        $text_parts[] = $part;
-                    }
-                    continue;
-                }
-
-                // Ігноруємо блоки роздумів
-                $type = isset($part['type'])
-                    ? strtolower((string) $part['type'])
-                    : 'text';
-                if (
-                    in_array(
-                        $type,
-                        [
-                            'reasoning',
-                            'thought',
-                            'analysis',
-                            'internal_monologue',
-                        ],
-                        true
-                    )
-                ) {
-                    continue;
-                }
-
-                // Беремо тільки текст
-                if (isset($part['text']) && is_string($part['text'])) {
-                    $text_parts[] = $part['text'];
-                } elseif (
-                    isset($part['content']) &&
-                    is_string($part['content'])
-                ) {
-                    $text_parts[] = $part['content'];
-                }
-            }
-            $result = trim(implode("\n", $text_parts));
-            if ('' !== $result) {
-                return $result;
-            }
-        }
-
-        // Якщо контент — рядок
-        if (is_string($content) && '' !== trim($content)) {
-            return trim($content);
-        }
-
-        // Fallback для Gemini 3 Pro: шукаємо фінал в reasoning_details
-        if (
-            'google/gemini-3-pro-preview' === $model &&
-            isset($message['reasoning_details']) &&
-            is_array($message['reasoning_details'])
-        ) {
-            foreach ($message['reasoning_details'] as $detail) {
-                if (!is_array($detail)) {
-                    continue;
-                }
-                $type = isset($detail['type'])
-                    ? strtolower((string) $detail['type'])
-                    : '';
-                if (
-                    in_array(
-                        $type,
-                        ['final', 'final_answer', 'answer', 'text'],
-                        true
-                    )
-                ) {
-                    $final_text = $detail['text'] ?? ($detail['content'] ?? '');
-                    if (is_string($final_text) && '' !== trim($final_text)) {
-                        return trim($final_text);
-                    }
-                }
-            }
-        }
-
-        return '';
     }
 
     private function prepare_list_from_textarea($raw)
@@ -734,11 +1877,315 @@ final class Treba_Generate_Content_Plugin
         return $estimated;
     }
 
+    /**
+     * OpenRouter деякі моделі (зокрема Gemini) віддають контент масивом частин.
+     * Агрегуємо їх у звичайний текст.
+     */
+    private function extract_choice_content($choice, $model = '')
+    {
+        if (is_string($choice)) {
+            return trim($choice);
+        }
+
+        if (!is_array($choice)) {
+            return '';
+        }
+
+        // Основна гілка: message->content
+        $message = $choice['message'] ?? [];
+        $content = is_array($message) ? $message['content'] ?? '' : $message;
+        $text = $this->extract_text_from_content($content);
+
+        if ('' !== $text) {
+            if (
+                'google/gemini-3-pro-preview' === $model &&
+                $this->looks_like_reasoning($text)
+            ) {
+                $final = $this->extract_final_from_reasoning_details(
+                    is_array($message)
+                        ? $message['reasoning_details'] ?? []
+                        : []
+                );
+
+                if ('' !== $final) {
+                    return $final;
+                }
+
+                return '';
+            }
+
+            return $text;
+        }
+
+        // Деякі відповіді можуть мати content на верхньому рівні choice.
+        if (isset($choice['content'])) {
+            $fallback = $this->extract_text_from_content($choice['content']);
+
+            if ('' !== $fallback) {
+                return $fallback;
+            }
+        }
+
+        // Для Gemini 3 Pro Preview інколи фінал приходить у reasoning_details.
+        if (
+            'google/gemini-3-pro-preview' === $model &&
+            is_array($message) &&
+            isset($message['reasoning_details'])
+        ) {
+            $final = $this->extract_final_from_reasoning_details(
+                $message['reasoning_details']
+            );
+
+            if ('' !== $final) {
+                return $final;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Нормалізує різні формати content: рядок, масив частин, вкладені об'єкти.
+     */
+    private function extract_text_from_content($content)
+    {
+        $parts = $this->flatten_content_to_strings($content);
+        return trim(implode("\n", $parts));
+    }
+
+    /**
+     * Рекурсивно збирає текстові частини з різних структур відповіді OpenRouter/Gemini.
+     *
+     * Підтримка:
+     * - прості рядки;
+     * - масиви рядків;
+     * - масиви частин з ключами text/content/value;
+     * - вкладені масиви у ключах content/parts/segments/output_text/reasoning/reasoning_details/annotations.
+     */
+    private function flatten_content_to_strings($node)
+    {
+        $result = [];
+
+        // Прості випадки
+        if (is_string($node)) {
+            $trimmed = trim($node);
+
+            if ('' !== $trimmed) {
+                $result[] = $trimmed;
+            }
+
+            return $result;
+        }
+
+        if (!is_array($node)) {
+            return $result;
+        }
+
+        // Якщо це блок reasoning/analysis — ігноруємо
+        if (isset($node['type']) && is_string($node['type'])) {
+            $type = strtolower($node['type']);
+
+            if (in_array($type, ['reasoning', 'analysis'], true)) {
+                return $result;
+            }
+        }
+
+        // Якщо асоціативний масив із текстом прямо
+        $has_text = isset($node['text']) && is_string($node['text']);
+        $has_value = isset($node['value']) && is_string($node['value']);
+        $has_content_scalar =
+            isset($node['content']) && is_string($node['content']);
+
+        if ($has_text || $has_value || $has_content_scalar) {
+            $candidate = $has_text
+                ? $node['text']
+                : ($has_value
+                    ? $node['value']
+                    : $node['content']);
+            $candidate = trim($candidate);
+
+            if ('' !== $candidate) {
+                $result[] = $candidate;
+            }
+
+            return $result;
+        }
+
+        // Якщо асоціативний масив з вкладеним контентом
+        foreach (
+            ['content', 'parts', 'segments', 'output_text', 'annotations']
+            as $key
+        ) {
+            if (isset($node[$key])) {
+                $result = array_merge(
+                    $result,
+                    $this->flatten_content_to_strings($node[$key])
+                );
+            }
+        }
+
+        // Якщо це числовий масив — пройдемося по елементах
+        $is_list = array_keys($node) === range(0, count($node) - 1);
+
+        if ($is_list) {
+            foreach ($node as $item) {
+                $result = array_merge(
+                    $result,
+                    $this->flatten_content_to_strings($item)
+                );
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Витягує фінальну відповідь з reasoning_details, не підмішуючи роздуми.
+     */
+    private function extract_final_from_reasoning_details($details)
+    {
+        if (!is_array($details)) {
+            return '';
+        }
+
+        $allowed_keys = [
+            'final',
+            'final_answer',
+            'answer',
+            'output_text',
+            'response',
+            'result',
+        ];
+
+        $parts = $this->collect_final_from_reasoning_details(
+            $details,
+            $allowed_keys
+        );
+
+        return trim(implode("\n", array_filter($parts)));
+    }
+
+    /**
+     * Рекурсивно збирає фінальну відповідь з reasoning_details за whitelist-ключами.
+     */
+    private function collect_final_from_reasoning_details($node, $allowed_keys)
+    {
+        $parts = [];
+
+        if (is_string($node)) {
+            $trimmed = trim($node);
+
+            if ('' !== $trimmed) {
+                $parts[] = $trimmed;
+            }
+
+            return $parts;
+        }
+
+        if (!is_array($node)) {
+            return $parts;
+        }
+
+        if (isset($node['type']) && is_string($node['type'])) {
+            $type = strtolower($node['type']);
+
+            if (
+                in_array(
+                    $type,
+                    [
+                        'final',
+                        'final_answer',
+                        'answer',
+                        'output_text',
+                        'response',
+                        'result',
+                    ],
+                    true
+                )
+            ) {
+                $text = $this->extract_text_from_content($node);
+
+                if ('' !== $text) {
+                    $parts[] = $text;
+                }
+            }
+        }
+
+        foreach ($allowed_keys as $key) {
+            if (array_key_exists($key, $node)) {
+                $text = $this->extract_text_from_content($node[$key]);
+
+                if ('' !== $text) {
+                    $parts[] = $text;
+                }
+            }
+        }
+
+        foreach ($node as $value) {
+            $parts = array_merge(
+                $parts,
+                $this->collect_final_from_reasoning_details(
+                    $value,
+                    $allowed_keys
+                )
+            );
+        }
+
+        return $parts;
+    }
+
+    /**
+     * Евристика: чи схоже, що текст містить лише reasoning без фінальної відповіді.
+     */
+    private function looks_like_reasoning($text)
+    {
+        if (!is_string($text)) {
+            return false;
+        }
+
+        $trimmed = trim($text);
+
+        if ('' === $trimmed) {
+            return false;
+        }
+
+        $lower = strtolower($trimmed);
+        $has_cyrillic = (bool) preg_match('/[А-Яа-яЁёІіЇїЄєҐґ]/u', $trimmed);
+        $markers = [
+            'examining',
+            'structuring',
+            'reviewing',
+            'decoding',
+            'analyzing',
+            'analysis',
+            'reasoning',
+            'scope of work',
+            'project',
+            'parameters',
+            "i'm",
+            'i’ve',
+            'i am',
+            'my next step',
+            'i’m',
+        ];
+
+        foreach ($markers as $marker) {
+            if (false !== strpos($lower, $marker)) {
+                return !$has_cyrillic;
+            }
+        }
+
+        return false;
+    }
+
     private function get_max_tokens_key($model, $use_openrouter)
     {
+        // Нові моделі GPT-5 на OpenAI вимагають max_completion_tokens.
         if (!$use_openrouter && 0 === strpos($model, 'gpt-5')) {
             return 'max_completion_tokens';
         }
+
+        // Для OpenRouter і решти моделей лишаємо звичний ключ.
         return 'max_tokens';
     }
 
@@ -844,44 +2291,68 @@ final class Treba_Generate_Content_Plugin
     private function encrypt_api_key($api_key)
     {
         $api_key = trim($api_key);
-        if ('' === $api_key) {
-            return false;
+
+        if ('' === $api_key || !function_exists('openssl_encrypt')) {
+            return '';
         }
 
-        $key = $this->get_encryption_key();
-        if (!$key) {
-            return false;
-        }
-
-        $iv = openssl_random_pseudo_bytes(
-            openssl_cipher_iv_length('aes-256-cbc')
+        $encryption_key = $this->get_encryption_key();
+        $iv = $this->generate_iv();
+        $cipher = openssl_encrypt(
+            $api_key,
+            'aes-256-cbc',
+            $encryption_key,
+            OPENSSL_RAW_DATA,
+            $iv
         );
-        $encrypted = openssl_encrypt($api_key, 'aes-256-cbc', $key, 0, $iv);
 
-        if (!$encrypted) {
-            return false;
+        if (false === $cipher) {
+            return '';
         }
 
-        return base64_encode($iv . $encrypted);
+        return wp_json_encode([
+            'iv' => base64_encode($iv),
+            'value' => base64_encode($cipher),
+        ]);
     }
 
-    private function decrypt_api_key($encrypted_base64)
+    private function decrypt_api_key($value)
     {
-        if ('' === $encrypted_base64) {
-            return false;
+        if ('' === $value) {
+            return '';
         }
 
-        $data = base64_decode($encrypted_base64);
-        $iv_len = openssl_cipher_iv_length('aes-256-cbc');
-        $iv = substr($data, 0, $iv_len);
-        $encrypted = substr($data, $iv_len);
-
-        $key = $this->get_encryption_key();
-        if (!$key) {
-            return false;
+        if (!function_exists('openssl_decrypt')) {
+            return $value;
         }
 
-        return openssl_decrypt($encrypted, 'aes-256-cbc', $key, 0, $iv);
+        $decoded = json_decode($value, true);
+
+        if (
+            !is_array($decoded) ||
+            empty($decoded['iv']) ||
+            empty($decoded['value'])
+        ) {
+            return $value;
+        }
+
+        $iv = base64_decode($decoded['iv'], true);
+        $cipher = base64_decode($decoded['value'], true);
+
+        if (!is_string($iv) || !is_string($cipher) || 16 !== strlen($iv)) {
+            return '';
+        }
+
+        $encryption_key = $this->get_encryption_key();
+        $plain = openssl_decrypt(
+            $cipher,
+            'aes-256-cbc',
+            $encryption_key,
+            OPENSSL_RAW_DATA,
+            $iv
+        );
+
+        return is_string($plain) ? $plain : '';
     }
 
     private function get_encryption_key()
@@ -890,485 +2361,59 @@ final class Treba_Generate_Content_Plugin
             return $this->encryption_key;
         }
 
-        if (defined('SECURE_AUTH_KEY') && '' !== SECURE_AUTH_KEY) {
-            $this->encryption_key = hash('sha256', SECURE_AUTH_KEY, true);
-        } else {
-            $this->encryption_key = hash('sha256', 'tgpt_fallback_key', true);
+        $source = '';
+
+        foreach (
+            ['AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY']
+            as $constant
+        ) {
+            if (defined($constant)) {
+                $source .= constant($constant);
+            }
         }
+
+        if ('' === $source) {
+            $source = wp_salt('auth');
+        }
+
+        $this->encryption_key = hash('sha256', $source, true);
 
         return $this->encryption_key;
     }
 
-    public function render_admin_page()
+    private function generate_iv()
     {
-        $active_tab = isset($_GET['tab'])
-            ? sanitize_text_field($_GET['tab'])
-            : 'generate'; ?>
-        <div class="wrap">
-            <h1><?php esc_html_e('Treba GPT', 'treba-generate-content'); ?></h1>
+        if (function_exists('random_bytes')) {
+            return random_bytes(16);
+        }
 
-            <h2 class="nav-tab-wrapper">
-                <a href="?page=treba-gpt&tab=generate" class="nav-tab <?php echo 'generate' ===
-                $active_tab
-                    ? 'nav-tab-active'
-                    : ''; ?>"><?php esc_html_e(
-    'Генерація',
-    'treba-generate-content'
-); ?></a>
-                <a href="?page=treba-gpt&tab=templates" class="nav-tab <?php echo 'templates' ===
-                $active_tab
-                    ? 'nav-tab-active'
-                    : ''; ?>"><?php esc_html_e(
-    'Шаблони',
-    'treba-generate-content'
-); ?></a>
-                <a href="?page=treba-gpt&tab=settings" class="nav-tab <?php echo 'settings' ===
-                $active_tab
-                    ? 'nav-tab-active'
-                    : ''; ?>"><?php esc_html_e(
-    'Налаштування',
-    'treba-generate-content'
-); ?></a>
-            </h2>
+        if (function_exists('openssl_random_pseudo_bytes')) {
+            return openssl_random_pseudo_bytes(16);
+        }
 
-            <?php
-            foreach ($this->notices as $notice) {
-                echo '<div class="notice notice-success is-dismissible"><p>' .
-                    $notice .
-                    '</p></div>';
-            }
-            foreach ($this->errors as $error) {
-                echo '<div class="notice notice-error is-dismissible"><p>' .
-                    $error .
-                    '</p></div>';
-            }
-            ?>
-
-            <div class="tab-content" style="margin-top: 20px;">
-                <?php if ('generate' === $active_tab) {
-                    $this->render_generate_tab();
-                } elseif ('templates' === $active_tab) {
-                    $this->render_templates_tab();
-                } elseif ('settings' === $active_tab) {
-                    $this->render_settings_tab();
-                } ?>
-            </div>
-        </div>
-        <?php
+        return substr(
+            hash('sha256', wp_generate_password(64, true, true), true),
+            0,
+            16
+        );
     }
 
-    private function render_generate_tab()
+    private function can_manage_templates()
     {
-        $has_any_key = $this->has_any_api_key();
-        if (!$has_any_key): ?>
-            <div class="notice notice-warning inline">
-                <p><?php esc_html_e(
-                    'Жоден ключ API (OpenAI чи OpenRouter) не налаштований. Додайте ключ у вкладці «Налаштування».',
-                    'treba-generate-content'
-                ); ?></p>
-            </div>
-        <?php endif;
-        ?>
-
-        <form method="post" action="">
-            <?php wp_nonce_field('tgpt_action_nonce', 'tgpt_nonce'); ?>
-            <input type="hidden" name="tgpt_action" value="generate">
-
-            <table class="form-table">
-                <tr>
-                    <th scope="row"><label for="tgpt_title"><?php esc_html_e(
-                        'Тема статті',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td><input id="tgpt_title" name="tgpt_title" type="text" class="regular-text" value="<?php echo esc_attr(
-                        $this->get_field_value('tgpt_title')
-                    ); ?>" required></td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_keywords"><?php esc_html_e(
-                        'Ключові слова',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <textarea id="tgpt_keywords" name="tgpt_keywords" rows="5" class="regular-text"><?php echo esc_textarea(
-                            $this->get_field_value('tgpt_keywords')
-                        ); ?></textarea>
-                        <p class="description"><?php esc_html_e(
-                            'Кожне слово з нового рядка або через кому.',
-                            'treba-generate-content'
-                        ); ?></p>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_word_goal"><?php esc_html_e(
-                        'Кількість слів (мінімум)',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td><input id="tgpt_word_goal" name="tgpt_word_goal" type="number" class="small-text" value="<?php echo esc_attr(
-                        $this->get_field_value('tgpt_word_goal', '800')
-                    ); ?>"></td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_language"><?php esc_html_e(
-                        'Мова статті',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <select id="tgpt_language" name="tgpt_language">
-                            <option value="uk" <?php selected(
-                                $this->get_field_value('tgpt_language', 'uk'),
-                                'uk'
-                            ); ?>><?php esc_html_e(
-    'Українська',
-    'treba-generate-content'
-); ?></option>
-                            <option value="en" <?php selected(
-                                $this->get_field_value('tgpt_language'),
-                                'en'
-                            ); ?>><?php esc_html_e(
-    'English',
-    'treba-generate-content'
-); ?></option>
-                        </select>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_model"><?php esc_html_e(
-                        'Модель',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <select id="tgpt_model" name="tgpt_model">
-                            <?php
-                            $default_model = $this->get_default_model();
-                            foreach ($this->models as $value => $label): ?>
-                                <option value="<?php echo esc_attr(
-                                    $value
-                                ); ?>" <?php selected(
-    $this->get_field_value('tgpt_model', $default_model),
-    $value
-); ?>>
-                                    <?php echo esc_html($label); ?>
-                                </option>
-                            <?php endforeach;
-                            ?>
-                        </select>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_template"><?php esc_html_e(
-                        'Шаблон промпту',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <?php if (empty($this->templates)): ?>
-                            <p class="description"><?php esc_html_e(
-                                'Спочатку створіть шаблон у вкладці «Шаблони».',
-                                'treba-generate-content'
-                            ); ?></p>
-                        <?php else: ?>
-                            <select id="tgpt_template" name="tgpt_template">
-                                <option value=""><?php esc_html_e(
-                                    'Оберіть шаблон...',
-                                    'treba-generate-content'
-                                ); ?></option>
-                                <?php foreach (
-                                    $this->templates
-                                    as $id => $tpl
-                                ): ?>
-                                    <option value="<?php echo esc_attr(
-                                        $id
-                                    ); ?>" <?php selected(
-    $this->get_field_value('tgpt_template'),
-    $id
-); ?>><?php echo esc_html($tpl['label']); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_extra"><?php esc_html_e(
-                        'Додаткові вимоги',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <textarea id="tgpt_extra" name="tgpt_extra" rows="3" class="regular-text"><?php echo esc_textarea(
-                            $this->get_field_value('tgpt_extra')
-                        ); ?></textarea>
-                    </td>
-                </tr>
-            </table>
-            <p class="submit">
-                <input type="submit" name="submit" id="submit" class="button button-primary" value="<?php esc_attr_e(
-                    'Згенерувати та створити чернетку',
-                    'treba-generate-content'
-                ); ?>" <?php disabled(!$has_any_key); ?>>
-            </p>
-        </form>
-        <?php
+        return $this->is_user_allowed();
     }
 
-    private function render_templates_tab()
+    private function is_user_allowed()
     {
-        ?>
-        <div class="templates-manager" style="display: flex; gap: 40px;">
-            <div class="template-form" style="flex: 1;">
-                <h3><?php esc_html_e(
-                    'Додати / Редагувати шаблон',
-                    'treba-generate-content'
-                ); ?></h3>
-                <form method="post" action="">
-                    <?php wp_nonce_field('tgpt_action_nonce', 'tgpt_nonce'); ?>
-                    <input type="hidden" name="tgpt_action" value="save_template">
-                    <table class="form-table">
-                        <tr>
-                            <th scope="row"><label for="tgpt_template_id"><?php esc_html_e(
-                                'ID (лат., без пробілів)',
-                                'treba-generate-content'
-                            ); ?></label></th>
-                            <td><input id="tgpt_template_id" name="tgpt_template_id" type="text" class="regular-text" required></td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><label for="tgpt_template_label"><?php esc_html_e(
-                                'Назва',
-                                'treba-generate-content'
-                            ); ?></label></th>
-                            <td><input id="tgpt_template_label" name="tgpt_template_label" type="text" class="regular-text" required></td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><label for="tgpt_template_prompt"><?php esc_html_e(
-                                'Промпт',
-                                'treba-generate-content'
-                            ); ?></label></th>
-                            <td>
-                                <textarea id="tgpt_template_prompt" name="tgpt_template_prompt" rows="10" class="regular-text" required></textarea>
-                                <p class="description">
-                                    <?php esc_html_e(
-                                        'Доступні теги:',
-                                        'treba-generate-content'
-                                    ); ?><br>
-                                    <code>{topic}</code> — тема статті<br>
-                                    <code>{keywords}</code> — список ключів<br>
-                                    <code>{word_goal}</code> — вимога щодо кількості слів
-                                </p>
-                            </td>
-                        </tr>
-                    </table>
-                    <p class="submit"><input type="submit" class="button button-primary" value="<?php esc_attr_e(
-                        'Зберегти шаблон',
-                        'treba-generate-content'
-                    ); ?>"></p>
-                </form>
-            </div>
+        if (current_user_can('manage_options')) {
+            return true;
+        }
 
-            <div class="templates-list" style="flex: 1;">
-                <h3><?php esc_html_e(
-                    'Існуючі шаблони',
-                    'treba-generate-content'
-                ); ?></h3>
-                <?php if (empty($this->templates)): ?>
-                    <p><?php esc_html_e(
-                        'Шаблонів поки немає.',
-                        'treba-generate-content'
-                    ); ?></p>
-                <?php else: ?>
-                    <table class="wp-list-table widefat fixed striped">
-                        <thead>
-                            <tr>
-                                <th><?php esc_html_e(
-                                    'Назва',
-                                    'treba-generate-content'
-                                ); ?></th>
-                                <th><?php esc_html_e(
-                                    'ID',
-                                    'treba-generate-content'
-                                ); ?></th>
-                                <th><?php esc_html_e(
-                                    'Дії',
-                                    'treba-generate-content'
-                                ); ?></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($this->templates as $id => $tpl): ?>
-                                <tr>
-                                    <td><strong><?php echo esc_html(
-                                        $tpl['label']
-                                    ); ?></strong></td>
-                                    <td><code><?php echo esc_html(
-                                        $id
-                                    ); ?></code></td>
-                                    <td>
-                                        <button type="button" class="button edit-template" 
-                                                data-id="<?php echo esc_attr(
-                                                    $id
-                                                ); ?>" 
-                                                data-label="<?php echo esc_attr(
-                                                    $tpl['label']
-                                                ); ?>" 
-                                                data-prompt="<?php echo esc_attr(
-                                                    $tpl['prompt']
-                                                ); ?>">
-                                            <?php esc_html_e(
-                                                'Редагувати',
-                                                'treba-generate-content'
-                                            ); ?>
-                                        </button>
-                                        <form method="post" action="" style="display:inline;">
-                                            <?php wp_nonce_field(
-                                                'tgpt_action_nonce',
-                                                'tgpt_nonce'
-                                            ); ?>
-                                            <input type="hidden" name="tgpt_action" value="delete_template">
-                                            <input type="hidden" name="tgpt_template_id" value="<?php echo esc_attr(
-                                                $id
-                                            ); ?>">
-                                            <input type="submit" class="button" value="<?php esc_attr_e(
-                                                'Видалити',
-                                                'treba-generate-content'
-                                            ); ?>" onclick="return confirm('Ви впевнені?')">
-                                        </form>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                <?php endif; ?>
-            </div>
-        </div>
-        <script>
-            document.querySelectorAll('.edit-template').forEach(btn => {
-                btn.addEventListener('click', function() {
-                    document.getElementById('tgpt_template_id').value = this.dataset.id;
-                    document.getElementById('tgpt_template_label').value = this.dataset.label;
-                    document.getElementById('tgpt_template_prompt').value = this.dataset.prompt;
-                    window.scrollTo(0, 0);
-                });
-            });
-        </script>
-        <?php
-    }
-
-    private function render_settings_tab()
-    {
-        $has_key = $this->has_api_key();
-        $has_openrouter_key = $this->has_openrouter_api_key();
-        ?>
-        <form method="post" action="">
-            <?php wp_nonce_field('tgpt_action_nonce', 'tgpt_nonce'); ?>
-            <input type="hidden" name="tgpt_action" value="save_settings">
-
-            <table class="form-table">
-                <tr>
-                    <th scope="row"><label for="tgpt_api_key"><?php esc_html_e(
-                        'OpenAI API ключ',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <input id="tgpt_api_key" class="regular-text" type="password" name="tgpt_api_key" value="" placeholder="sk-..." autocomplete="off">
-                        <?php if ($has_key): ?>
-                            <p class="description" style="color: green;"><?php esc_html_e(
-                                'Ключ уже збережений. Залиште поле порожнім, щоб не змінювати.',
-                                'treba-generate-content'
-                            ); ?></p>
-                            <label><input type="checkbox" name="tgpt_clear_api_key" value="1"> <?php esc_html_e(
-                                'Видалити збережений ключ',
-                                'treba-generate-content'
-                            ); ?></label>
-                        <?php else: ?>
-                            <p class="description"><?php esc_html_e(
-                                'Введіть ключ один раз, він буде збережений у зашифрованому вигляді.',
-                                'treba-generate-content'
-                            ); ?></p>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_openrouter_api_key"><?php esc_html_e(
-                        'OpenRouter API ключ',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <input id="tgpt_openrouter_api_key" class="regular-text" type="password" name="tgpt_openrouter_api_key" value="" placeholder="sk-or-..." autocomplete="off">
-                        <?php if ($has_openrouter_key): ?>
-                            <p class="description" style="color: green;"><?php esc_html_e(
-                                'Ключ OpenRouter уже збережений. Залиште поле порожнім, щоб не змінювати.',
-                                'treba-generate-content'
-                            ); ?></p>
-                            <label><input type="checkbox" name="tgpt_clear_openrouter_api_key" value="1"> <?php esc_html_e(
-                                'Видалити збережений ключ OpenRouter',
-                                'treba-generate-content'
-                            ); ?></label>
-                        <?php else: ?>
-                            <p class="description"><?php esc_html_e(
-                                'Введіть ключ OpenRouter один раз, він буде збережений у зашифрованому вигляді.',
-                                'treba-generate-content'
-                            ); ?></p>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_default_model"><?php esc_html_e(
-                        'Модель за замовчуванням',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <select id="tgpt_default_model" name="tgpt_default_model">
-                            <?php foreach ($this->models as $val => $label): ?>
-                                <option value="<?php echo esc_attr(
-                                    $val
-                                ); ?>" <?php selected(
-    get_option($this->default_model_option, 'gpt-4o-mini'),
-    $val
-); ?>><?php echo esc_html($label); ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_temperature"><?php esc_html_e(
-                        'Temperature (0-2)',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <input id="tgpt_temperature" name="tgpt_temperature" type="number" step="0.05" min="0" max="2" value="<?php echo esc_attr(
-                            get_option($this->temperature_option, '0.65')
-                        ); ?>">
-                        <p class="description"><?php esc_html_e(
-                            '0 — максимально детерміновано, 1 — креативніше (OpenRouter може ігнорувати значення для окремих моделей).',
-                            'treba-generate-content'
-                        ); ?></p>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row"><label for="tgpt_allowed_users"><?php esc_html_e(
-                        'Користувачі (ID), яким дозволено доступ',
-                        'treba-generate-content'
-                    ); ?></label></th>
-                    <td>
-                        <?php
-                        $allowed = get_option($this->allowed_users_option, []);
-                        $allowed_str = is_array($allowed)
-                            ? implode("\n", $allowed)
-                            : '';
-                        ?>
-                        <textarea id="tgpt_allowed_users" name="tgpt_allowed_users" rows="5" class="regular-text"><?php echo esc_textarea(
-                            $allowed_str
-                        ); ?></textarea>
-                        <p class="description"><?php esc_html_e(
-                            'Кожен ID з нового рядка. Порожньо — доступ всім адмінам.',
-                            'treba-generate-content'
-                        ); ?></p>
-                    </td>
-                </tr>
-            </table>
-            <p class="submit"><input type="submit" class="button button-primary" value="<?php esc_attr_e(
-                'Зберегти налаштування',
-                'treba-generate-content'
-            ); ?>"></p>
-        </form>
-        <?php
+        $allowed_ids = array_map(
+            'intval',
+            (array) get_option($this->allowed_users_option, [])
+        );
+        return in_array(get_current_user_id(), $allowed_ids, true);
     }
 }
 
