@@ -1777,12 +1777,32 @@ final class Treba_Generate_Content_Plugin
         $content = $this->extract_choice_content($first_choice);
 
         if (empty($content)) {
-            $this->errors[] = esc_html__(
-                $use_openrouter
-                    ? 'OpenRouter не повернув контент.'
-                    : 'OpenAI не повернув контент.',
-                'treba-generate-content'
-            );
+            $hint = '';
+
+            if (is_array($first_choice)) {
+                $top_keys = implode(', ', array_keys($first_choice));
+                $message = isset($first_choice['message'])
+                    ? (is_array($first_choice['message'])
+                        ? implode(', ', array_keys($first_choice['message']))
+                        : 'message:scalar')
+                    : 'message:missing';
+                $hint = sprintf(
+                    ' (structure: choice keys [%s]; message keys [%s])',
+                    $top_keys,
+                    $message
+                );
+            }
+
+            $this->errors[] =
+                ($use_openrouter
+                    ? esc_html__(
+                        'OpenRouter не повернув контент',
+                        'treba-generate-content'
+                    )
+                    : esc_html__(
+                        'OpenAI не повернув контент',
+                        'treba-generate-content'
+                    )) . esc_html($hint);
             return '';
         }
 
@@ -1887,62 +1907,86 @@ final class Treba_Generate_Content_Plugin
     }
 
     /**
-     * Нормалізує різні формати content: рядок, масив частин, об'єкти з text/value.
+     * Нормалізує різні формати content: рядок, масив частин, вкладені об'єкти.
      */
     private function extract_text_from_content($content)
     {
-        if (is_string($content)) {
-            return trim($content);
-        }
-
-        if (!is_array($content)) {
-            return '';
-        }
-
-        $parts = [];
-
-        foreach ($content as $part) {
-            if (is_string($part)) {
-                $part = trim($part);
-
-                if ('' !== $part) {
-                    $parts[] = $part;
-                }
-
-                continue;
-            }
-
-            if (!is_array($part)) {
-                continue;
-            }
-
-            // Найпоширеніший формат OpenRouter для Gemini: ['type' => 'text', 'text' => '...']
-            if (isset($part['text']) && '' !== trim((string) $part['text'])) {
-                $parts[] = (string) $part['text'];
-                continue;
-            }
-
-            // Деякі варіанти можуть мати 'content' або 'value' замість 'text'.
-            if (
-                isset($part['content']) &&
-                is_string($part['content']) &&
-                '' !== trim($part['content'])
-            ) {
-                $parts[] = trim($part['content']);
-                continue;
-            }
-
-            if (
-                isset($part['value']) &&
-                is_string($part['value']) &&
-                '' !== trim($part['value'])
-            ) {
-                $parts[] = trim($part['value']);
-                continue;
-            }
-        }
-
+        $parts = $this->flatten_content_to_strings($content);
         return trim(implode("\n", $parts));
+    }
+
+    /**
+     * Рекурсивно збирає текстові частини з різних структур відповіді OpenRouter/Gemini.
+     *
+     * Підтримка:
+     * - прості рядки;
+     * - масиви рядків;
+     * - масиви частин з ключами text/content/value;
+     * - вкладені масиви у ключах content/parts/segments/output_text.
+     */
+    private function flatten_content_to_strings($node)
+    {
+        $result = [];
+
+        // Прості випадки
+        if (is_string($node)) {
+            $trimmed = trim($node);
+
+            if ('' !== $trimmed) {
+                $result[] = $trimmed;
+            }
+
+            return $result;
+        }
+
+        if (!is_array($node)) {
+            return $result;
+        }
+
+        // Якщо асоціативний масив із текстом прямо
+        $has_text = isset($node['text']) && is_string($node['text']);
+        $has_value = isset($node['value']) && is_string($node['value']);
+        $has_content_scalar =
+            isset($node['content']) && is_string($node['content']);
+
+        if ($has_text || $has_value || $has_content_scalar) {
+            $candidate = $has_text
+                ? $node['text']
+                : ($has_value
+                    ? $node['value']
+                    : $node['content']);
+            $candidate = trim($candidate);
+
+            if ('' !== $candidate) {
+                $result[] = $candidate;
+            }
+
+            return $result;
+        }
+
+        // Якщо асоціативний масив з вкладеним контентом
+        foreach (['content', 'parts', 'segments', 'output_text'] as $key) {
+            if (isset($node[$key])) {
+                $result = array_merge(
+                    $result,
+                    $this->flatten_content_to_strings($node[$key])
+                );
+            }
+        }
+
+        // Якщо це числовий масив — пройдемося по елементах
+        $is_list = array_keys($node) === range(0, count($node) - 1);
+
+        if ($is_list) {
+            foreach ($node as $item) {
+                $result = array_merge(
+                    $result,
+                    $this->flatten_content_to_strings($item)
+                );
+            }
+        }
+
+        return $result;
     }
 
     private function get_max_tokens_key($model, $use_openrouter)
