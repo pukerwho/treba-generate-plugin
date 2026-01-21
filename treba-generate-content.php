@@ -1703,12 +1703,8 @@ final class Treba_Generate_Content_Plugin
             ],
         ];
 
-        // Для Gemini 3 Pro Preview через OpenRouter просимо не повертати reasoning,
-        // бо інколи контент потрапляє лише в reasoning_details.
+        // Для Gemini 3 Pro Preview просимо повертати лише фінальну відповідь.
         if ($use_openrouter && 'google/gemini-3-pro-preview' === $model) {
-            $payload['reasoning'] = [
-                'enabled' => false,
-            ];
             $payload['messages'][0]['content'] .=
                 ' Respond only with the final answer. Do not include any reasoning or analysis.';
         }
@@ -1784,7 +1780,7 @@ final class Treba_Generate_Content_Plugin
         }
 
         $first_choice = $body['choices'][0] ?? [];
-        $content = $this->extract_choice_content($first_choice);
+        $content = $this->extract_choice_content($first_choice, $model);
 
         if (empty($content)) {
             $hint = '';
@@ -1885,7 +1881,7 @@ final class Treba_Generate_Content_Plugin
      * OpenRouter деякі моделі (зокрема Gemini) віддають контент масивом частин.
      * Агрегуємо їх у звичайний текст.
      */
-    private function extract_choice_content($choice)
+    private function extract_choice_content($choice, $model = '')
     {
         if (is_string($choice)) {
             return trim($choice);
@@ -1910,6 +1906,21 @@ final class Treba_Generate_Content_Plugin
 
             if ('' !== $fallback) {
                 return $fallback;
+            }
+        }
+
+        // Для Gemini 3 Pro Preview інколи фінал приходить у reasoning_details.
+        if (
+            'google/gemini-3-pro-preview' === $model &&
+            is_array($message) &&
+            isset($message['reasoning_details'])
+        ) {
+            $final = $this->extract_final_from_reasoning_details(
+                $message['reasoning_details']
+            );
+
+            if ('' !== $final) {
+                return $final;
             }
         }
 
@@ -2008,6 +2019,56 @@ final class Treba_Generate_Content_Plugin
         }
 
         return $result;
+    }
+
+    /**
+     * Витягує фінальну відповідь з reasoning_details, не підмішуючи роздуми.
+     */
+    private function extract_final_from_reasoning_details($details)
+    {
+        if (!is_array($details)) {
+            return '';
+        }
+
+        $parts = [];
+
+        foreach ($details as $detail) {
+            if (!is_array($detail)) {
+                continue;
+            }
+
+            $type = isset($detail['type'])
+                ? strtolower((string) $detail['type'])
+                : '';
+
+            if (in_array($type, ['final', 'final_answer', 'answer'], true)) {
+                $text = $this->extract_text_from_content($detail);
+
+                if ('' !== $text) {
+                    $parts[] = $text;
+                }
+            }
+
+            if (isset($detail['output_text'])) {
+                $text = $this->extract_text_from_content(
+                    $detail['output_text']
+                );
+
+                if ('' !== $text) {
+                    $parts[] = $text;
+                }
+            }
+
+            if (isset($detail['final'])) {
+                $text = $this->extract_text_from_content($detail['final']);
+
+                if ('' !== $text) {
+                    $parts[] = $text;
+                }
+            }
+        }
+
+        return trim(implode("\n", array_filter($parts)));
     }
 
     private function get_max_tokens_key($model, $use_openrouter)
