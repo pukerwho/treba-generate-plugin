@@ -1987,7 +1987,13 @@ final class Treba_Generate_Content_Plugin
         }
 
         if (null !== $max_tokens) {
-            $payload['generationConfig']['maxOutputTokens'] = (int) $max_tokens;
+            $max_tokens = (int) $max_tokens;
+            if ($max_tokens < 1024) {
+                $max_tokens = 1024;
+            } elseif ($max_tokens > 65536) {
+                $max_tokens = 65536;
+            }
+            $payload['generationConfig']['maxOutputTokens'] = $max_tokens;
         }
 
         $response = wp_remote_post($url, [
