@@ -1985,12 +1985,12 @@ final class Treba_Generate_Content_Plugin
       // Якщо не вказано, ставимо високий ліміт для довгих статей
       $payload['generationConfig']['maxOutputTokens'] = 65536;
 
-      // Для Gemini 3 Pro збільшуємо ліміт токенів та налаштовуємо бюджет мислення
+      // Для Gemini 3 Pro збільшуємо ліміт токенів та налаштовуємо рівень мислення
       if ('gemini-3-pro-preview' === $model_name) {
         $payload['generationConfig']['maxOutputTokens'] = 65536;
         $payload['generationConfig']['thinkingConfig'] = [
           'includeThoughts' => false,
-          'thinkingBudget' => 50000,
+          'thinkingLevel' => 'low',
         ];
       }
     }
