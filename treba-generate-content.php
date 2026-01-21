@@ -1994,6 +1994,14 @@ final class Treba_Generate_Content_Plugin
                 $max_tokens = 65536;
             }
             $payload['generationConfig']['maxOutputTokens'] = $max_tokens;
+        } else {
+            // Якщо не вказано, ставимо високий ліміт для довгих статей
+            $payload['generationConfig']['maxOutputTokens'] = 65536;
+        }
+
+        // Для Gemini 3 Pro встановлюємо thinking_level
+        if ('gemini-3-pro-preview' === $model) {
+            $payload['generationConfig']['thinking_level'] = 'high';
         }
 
         $response = wp_remote_post($url, [
@@ -2075,10 +2083,11 @@ final class Treba_Generate_Content_Plugin
         }
 
         if ('MAX_TOKENS' === $finish_reason) {
-            $this->notices[] = esc_html__(
-                'Відповідь Google AI Studio обрізана через MAX_TOKENS. Зменште мінімальну кількість слів або розбийте запит на частини, якщо потрібен повний текст.',
+            $this->errors[] = esc_html__(
+                'Google AI Studio обірвав відповідь через MAX_TOKENS. Спробуйте: 1) зменшити мінімальну кількість слів, 2) переконатись що thinking_budget достатній, 3) використати іншу модель.',
                 'treba-generate-content'
             );
+            return '';
         }
 
         return trim($content);
