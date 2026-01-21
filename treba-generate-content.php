@@ -2056,37 +2056,10 @@ final class Treba_Generate_Content_Plugin
         }
 
         $candidate = $candidates[0] ?? [];
-        $parts = $candidate['content']['parts'] ?? [];
-        $content = '';
-
-        if (is_array($parts)) {
-            if (isset($parts['text']) && is_string($parts['text'])) {
-                $content = trim($parts['text']);
-            } else {
-                $content = $this->extract_text_from_parts($parts, ['text']);
-            }
-        } elseif (is_string($parts)) {
-            $content = trim($parts);
-        }
+        $finish_reason = $candidate['finishReason'] ?? '';
+        $content = $this->extract_google_ai_text($candidate);
 
         if ('' === $content) {
-            $content =
-                isset($candidate['content']['text']) &&
-                is_string($candidate['content']['text'])
-                    ? trim($candidate['content']['text'])
-                    : '';
-        }
-
-        if (
-            '' === $content &&
-            isset($candidate['text']) &&
-            is_string($candidate['text'])
-        ) {
-            $content = trim($candidate['text']);
-        }
-
-        if ('' === $content) {
-            $finish_reason = $candidate['finishReason'] ?? '';
             $safety = $this->summarize_google_ai_safety(
                 $candidate['safetyRatings'] ?? []
             );
@@ -2101,9 +2074,96 @@ final class Treba_Generate_Content_Plugin
             return '';
         }
 
+        if ('MAX_TOKENS' === $finish_reason) {
+            $this->notices[] = esc_html__(
+                'Відповідь Google AI Studio обрізана через MAX_TOKENS. Зменште мінімальну кількість слів або розбийте запит на частини, якщо потрібен повний текст.',
+                'treba-generate-content'
+            );
+        }
+
         return trim($content);
     }
 
+    private function extract_google_ai_text($candidate)
+    {
+        if (!is_array($candidate)) {
+            return '';
+        }
+
+        $content = $candidate['content'] ?? [];
+        $parts = is_array($content) ? $content['parts'] ?? [] : $content;
+
+        if (is_array($parts)) {
+            if (isset($parts['text']) && is_string($parts['text'])) {
+                return trim($parts['text']);
+            }
+
+            $text = $this->extract_text_from_parts($parts, ['text']);
+            if ('' !== $text) {
+                return $text;
+            }
+        } elseif (is_string($parts)) {
+            return trim($parts);
+        }
+
+        if (
+            is_array($content) &&
+            isset($content['text']) &&
+            is_string($content['text'])
+        ) {
+            return trim($content['text']);
+        }
+
+        if (isset($candidate['text']) && is_string($candidate['text'])) {
+            return trim($candidate['text']);
+        }
+
+        return $this->extract_text_from_allowed_keys($candidate, [
+            'text',
+            'output_text',
+            'outputText',
+            'content',
+            'response',
+            'result',
+        ]);
+    }
+
+    private function extract_text_from_allowed_keys($node, $allowed_keys)
+    {
+        if (is_string($node)) {
+            $trimmed = trim($node);
+            return '' === $trimmed ? '' : $trimmed;
+        }
+
+        if (!is_array($node)) {
+            return '';
+        }
+
+        foreach ($allowed_keys as $key) {
+            if (!array_key_exists($key, $node)) {
+                continue;
+            }
+            $text = $this->extract_text_from_allowed_keys(
+                $node[$key],
+                $allowed_keys
+            );
+            if ('' !== $text) {
+                return $text;
+            }
+        }
+
+        foreach ($node as $value) {
+            $text = $this->extract_text_from_allowed_keys(
+                $value,
+                $allowed_keys
+            );
+            if ('' !== $text) {
+                return $text;
+            }
+        }
+
+        return '';
+    }
     private function summarize_google_ai_safety($ratings)
     {
         if (!is_array($ratings) || empty($ratings)) {
