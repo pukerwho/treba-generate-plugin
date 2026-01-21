@@ -2030,37 +2030,49 @@ final class Treba_Generate_Content_Plugin
             return '';
         }
 
+        $allowed_keys = [
+            'final',
+            'final_answer',
+            'answer',
+            'output_text',
+            'response',
+            'result',
+        ];
+
+        $parts = $this->collect_final_from_reasoning_details(
+            $details,
+            $allowed_keys
+        );
+
+        return trim(implode("\n", array_filter($parts)));
+    }
+
+    /**
+     * Рекурсивно збирає фінальну відповідь з reasoning_details за whitelist-ключами.
+     */
+    private function collect_final_from_reasoning_details($node, $allowed_keys)
+    {
         $parts = [];
 
-        foreach ($details as $detail) {
-            if (!is_array($detail)) {
-                continue;
+        if (is_string($node)) {
+            $trimmed = trim($node);
+
+            if ('' !== $trimmed) {
+                $parts[] = $trimmed;
             }
 
-            $type = isset($detail['type'])
-                ? strtolower((string) $detail['type'])
-                : '';
+            return $parts;
+        }
+
+        if (!is_array($node)) {
+            return $parts;
+        }
+
+        if (isset($node['type']) && is_string($node['type'])) {
+            $type = strtolower($node['type']);
 
             if (in_array($type, ['final', 'final_answer', 'answer'], true)) {
-                $text = $this->extract_text_from_content($detail);
-
-                if ('' !== $text) {
-                    $parts[] = $text;
-                }
-            }
-
-            if (isset($detail['output_text'])) {
-                $text = $this->extract_text_from_content(
-                    $detail['output_text']
-                );
-
-                if ('' !== $text) {
-                    $parts[] = $text;
-                }
-            }
-
-            if (isset($detail['final'])) {
-                $text = $this->extract_text_from_content($detail['final']);
+                $text = $this->extract_text_from_content($node);
 
                 if ('' !== $text) {
                     $parts[] = $text;
@@ -2068,7 +2080,27 @@ final class Treba_Generate_Content_Plugin
             }
         }
 
-        return trim(implode("\n", array_filter($parts)));
+        foreach ($allowed_keys as $key) {
+            if (array_key_exists($key, $node)) {
+                $text = $this->extract_text_from_content($node[$key]);
+
+                if ('' !== $text) {
+                    $parts[] = $text;
+                }
+            }
+        }
+
+        foreach ($node as $value) {
+            $parts = array_merge(
+                $parts,
+                $this->collect_final_from_reasoning_details(
+                    $value,
+                    $allowed_keys
+                )
+            );
+        }
+
+        return $parts;
     }
 
     private function get_max_tokens_key($model, $use_openrouter)
