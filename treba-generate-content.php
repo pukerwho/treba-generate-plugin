@@ -1890,6 +1890,24 @@ final class Treba_Generate_Content_Plugin
         $content = is_array($message) ? $message['content'] ?? '' : $message;
         $text = $this->extract_text_from_content($content);
 
+        // Додаємо reasoning / reasoning_details / refusal / annotations, бо Gemini може класти текст туди.
+        if (is_array($message)) {
+            foreach (
+                ['reasoning', 'reasoning_details', 'refusal', 'annotations']
+                as $extra_key
+            ) {
+                if (isset($message[$extra_key])) {
+                    $text_extra = $this->extract_text_from_content(
+                        $message[$extra_key]
+                    );
+
+                    if ('' !== $text_extra) {
+                        $text = trim($text . "\n" . $text_extra);
+                    }
+                }
+            }
+        }
+
         if ('' !== $text) {
             return $text;
         }
@@ -1922,7 +1940,7 @@ final class Treba_Generate_Content_Plugin
      * - прості рядки;
      * - масиви рядків;
      * - масиви частин з ключами text/content/value;
-     * - вкладені масиви у ключах content/parts/segments/output_text.
+     * - вкладені масиви у ключах content/parts/segments/output_text/reasoning/reasoning_details/annotations.
      */
     private function flatten_content_to_strings($node)
     {
@@ -1965,7 +1983,18 @@ final class Treba_Generate_Content_Plugin
         }
 
         // Якщо асоціативний масив з вкладеним контентом
-        foreach (['content', 'parts', 'segments', 'output_text'] as $key) {
+        foreach (
+            [
+                'content',
+                'parts',
+                'segments',
+                'output_text',
+                'reasoning',
+                'reasoning_details',
+                'annotations',
+            ]
+            as $key
+        ) {
             if (isset($node[$key])) {
                 $result = array_merge(
                     $result,
