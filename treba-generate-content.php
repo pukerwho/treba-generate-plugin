@@ -1979,10 +1979,12 @@ final class Treba_Generate_Content_Plugin
         $max_tokens = 1024;
       } elseif ($max_tokens > 65536) {
         $max_tokens = 65536;
+      }
       $payload['generationConfig']['maxOutputTokens'] = $max_tokens;
     } else {
       // Якщо не вказано, ставимо високий ліміт для довгих статей
       $payload['generationConfig']['maxOutputTokens'] = 65536;
+
       // Для Gemini 3 Pro збільшуємо ліміт токенів
       if ('gemini-3-pro-preview' === $model_name) {
         $payload['generationConfig']['maxOutputTokens'] = 65536;
