@@ -1890,26 +1890,26 @@ final class Treba_Generate_Content_Plugin
         $content = is_array($message) ? $message['content'] ?? '' : $message;
         $text = $this->extract_text_from_content($content);
 
-        // Додаємо reasoning / reasoning_details / refusal / annotations, бо Gemini може класти текст туди.
+        if ('' !== $text) {
+            return $text;
+        }
+
+        // Якщо контент порожній, пробуємо додаткові поля Gemini.
         if (is_array($message)) {
             foreach (
-                ['reasoning', 'reasoning_details', 'refusal', 'annotations']
+                ['reasoning', 'reasoning_details', 'annotations', 'refusal']
                 as $extra_key
             ) {
-                if (isset($message[$extra_key])) {
+                if (array_key_exists($extra_key, $message)) {
                     $text_extra = $this->extract_text_from_content(
                         $message[$extra_key]
                     );
 
                     if ('' !== $text_extra) {
-                        $text = trim($text . "\n" . $text_extra);
+                        return $text_extra;
                     }
                 }
             }
-        }
-
-        if ('' !== $text) {
-            return $text;
         }
 
         // Деякі відповіді можуть мати content на верхньому рівні choice.
