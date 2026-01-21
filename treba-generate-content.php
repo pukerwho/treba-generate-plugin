@@ -30,6 +30,7 @@ final class Treba_Generate_Content_Plugin
     private $cached_api_key = null;
     private $cached_openrouter_api_key = null;
     private $encryption_key = null;
+    private $last_openrouter_content_types = [];
     private $models = [
         'gpt-4o-mini' => 'GPT-4o mini — Input: $0,15; Output: $0,60',
         'gpt-4o-mini-search-preview' =>
@@ -1591,6 +1592,20 @@ final class Treba_Generate_Content_Plugin
             return;
         }
 
+        if (
+            'google/gemini-3-pro-preview' === $model &&
+            !empty($this->last_openrouter_content_types)
+        ) {
+            $this->notices[] = sprintf(
+                '%s %s',
+                esc_html__(
+                    'OpenRouter типи контенту:',
+                    'treba-generate-content'
+                ),
+                esc_html(implode(', ', $this->last_openrouter_content_types))
+            );
+        }
+
         $content = $this->convert_markdown_to_html($content);
 
         if ('' === trim($content)) {
@@ -1791,6 +1806,25 @@ final class Treba_Generate_Content_Plugin
         $first_choice = $body['choices'][0] ?? [];
         $content = $this->extract_choice_content($first_choice, $model);
 
+        if (
+            $use_openrouter &&
+            'google/gemini-3-pro-preview' === $model &&
+            'google-gemini-v1' === $content
+        ) {
+            $types = !empty($this->last_openrouter_content_types)
+                ? implode(', ', $this->last_openrouter_content_types)
+                : 'типів не знайдено';
+            $this->errors[] = sprintf(
+                '%s %s',
+                esc_html__(
+                    'OpenRouter повернув службовий контент (google-gemini-v1). Типи частин:',
+                    'treba-generate-content'
+                ),
+                esc_html($types)
+            );
+            return '';
+        }
+
         if (empty($content)) {
             $hint = '';
 
@@ -1977,6 +2011,8 @@ final class Treba_Generate_Content_Plugin
                 : '';
             if ('' !== $type) {
                 $types[$type] = true;
+            } else {
+                $types['(empty)'] = true;
             }
 
             if ('' !== $type && !in_array($type, $allowed_types, true)) {
@@ -1996,19 +2032,9 @@ final class Treba_Generate_Content_Plugin
 
         $result = trim(implode("\n", array_filter(array_map('trim', $texts))));
 
-        if ('' === $result) {
-            $type_list = !empty($types)
-                ? implode(', ', array_keys($types))
-                : 'типів не знайдено';
-            $this->errors[] = sprintf(
-                '%s %s',
-                esc_html__(
-                    'OpenRouter типи контенту:',
-                    'treba-generate-content'
-                ),
-                esc_html($type_list)
-            );
-        }
+        $this->last_openrouter_content_types = !empty($types)
+            ? array_keys($types)
+            : ['типів не знайдено'];
 
         return $result;
     }
