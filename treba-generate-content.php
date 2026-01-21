@@ -1536,8 +1536,9 @@ final class Treba_Generate_Content_Plugin
         $api_key = $is_openrouter
             ? $this->get_saved_openrouter_api_key()
             : $this->get_saved_api_key();
+        $api_key = trim((string) $api_key);
 
-        if (empty($api_key)) {
+        if ('' === $api_key) {
             $this->errors[] = $is_openrouter
                 ? esc_html__(
                     'Ключ OpenRouter API не налаштований. Додайте його у вкладці «Налаштування».',
@@ -1547,6 +1548,14 @@ final class Treba_Generate_Content_Plugin
                     'Ключ OpenAI API не налаштований. Додайте його у вкладці «Налаштування».',
                     'treba-generate-content'
                 );
+            return;
+        }
+
+        if ($is_openrouter && 0 !== strpos($api_key, 'sk-or-')) {
+            $this->errors[] = esc_html__(
+                'OpenRouter API ключ має починатися з "sk-or-". Перевірте ключ у вкладці «Налаштування».',
+                'treba-generate-content'
+            );
             return;
         }
 
@@ -1909,6 +1918,20 @@ final class Treba_Generate_Content_Plugin
             }
         }
 
+        if ('google/gemini-3-pro-preview' === $model && is_array($content)) {
+            $text = $this->extract_text_from_parts($content, [
+                'text',
+                'output_text',
+                'final',
+                'final_answer',
+                'answer',
+            ]);
+
+            if ('' !== $text) {
+                return $text;
+            }
+        }
+
         $text = $this->extract_text_from_content($content);
 
         if ('' !== $text) {
@@ -1934,6 +1957,57 @@ final class Treba_Generate_Content_Plugin
     {
         $parts = $this->flatten_content_to_strings($content);
         return trim(implode("\n", $parts));
+    }
+
+    private function extract_text_from_parts($parts, $allowed_types)
+    {
+        $texts = [];
+        $types = [];
+
+        foreach ($parts as $part) {
+            if (!is_array($part)) {
+                if (is_string($part) && '' !== trim($part)) {
+                    $texts[] = $part;
+                }
+                continue;
+            }
+
+            $type = isset($part['type'])
+                ? strtolower((string) $part['type'])
+                : '';
+            if ('' !== $type) {
+                $types[$type] = true;
+            }
+
+            if ('' !== $type && !in_array($type, $allowed_types, true)) {
+                continue;
+            }
+
+            if (isset($part['text']) && is_string($part['text'])) {
+                $texts[] = $part['text'];
+                continue;
+            }
+
+            if (isset($part['content']) && is_string($part['content'])) {
+                $texts[] = $part['content'];
+                continue;
+            }
+        }
+
+        $result = trim(implode("\n", array_filter(array_map('trim', $texts))));
+
+        if ('' === $result && !empty($types)) {
+            $this->errors[] = sprintf(
+                '%s %s',
+                esc_html__(
+                    'OpenRouter типи контенту:',
+                    'treba-generate-content'
+                ),
+                esc_html(implode(', ', array_keys($types)))
+            );
+        }
+
+        return $result;
     }
 
     /**
