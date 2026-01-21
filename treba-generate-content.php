@@ -1744,9 +1744,10 @@ final class Treba_Generate_Content_Plugin
         if (is_wp_error($response)) {
             $this->errors[] = sprintf(
                 '%s %s',
-                esc_html__(
-                    'Помилка запиту до OpenAI:',
-                    'treba-generate-content'
+                esc_html(
+                    $use_openrouter
+                        ? 'Помилка запиту до OpenRouter:'
+                        : 'Помилка запиту до OpenAI:'
                 ),
                 esc_html($response->get_error_message())
             );
@@ -1762,9 +1763,10 @@ final class Treba_Generate_Content_Plugin
                 esc_html__('Невідома помилка API.', 'treba-generate-content');
             $this->errors[] = sprintf(
                 '%s %s',
-                esc_html__(
-                    'OpenAI повернув помилку:',
-                    'treba-generate-content'
+                esc_html(
+                    $use_openrouter
+                        ? 'OpenRouter повернув помилку:'
+                        : 'OpenAI повернув помилку:'
                 ),
                 esc_html($message)
             );
@@ -1776,7 +1778,9 @@ final class Treba_Generate_Content_Plugin
 
         if (empty($content)) {
             $this->errors[] = esc_html__(
-                'OpenAI не повернув контент.',
+                $use_openrouter
+                    ? 'OpenRouter не повернув контент.'
+                    : 'OpenAI не повернув контент.',
                 'treba-generate-content'
             );
             return '';
@@ -1853,9 +1857,40 @@ final class Treba_Generate_Content_Plugin
      */
     private function extract_choice_content($choice)
     {
-        $message = is_array($choice) ? $choice['message'] ?? [] : [];
-        $content = is_array($message) ? $message['content'] ?? '' : '';
+        if (is_string($choice)) {
+            return trim($choice);
+        }
 
+        if (!is_array($choice)) {
+            return '';
+        }
+
+        // Основна гілка: message->content
+        $message = $choice['message'] ?? [];
+        $content = is_array($message) ? $message['content'] ?? '' : $message;
+        $text = $this->extract_text_from_content($content);
+
+        if ('' !== $text) {
+            return $text;
+        }
+
+        // Деякі відповіді можуть мати content на верхньому рівні choice.
+        if (isset($choice['content'])) {
+            $fallback = $this->extract_text_from_content($choice['content']);
+
+            if ('' !== $fallback) {
+                return $fallback;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Нормалізує різні формати content: рядок, масив частин, об'єкти з text/value.
+     */
+    private function extract_text_from_content($content)
+    {
         if (is_string($content)) {
             return trim($content);
         }
@@ -1867,19 +1902,47 @@ final class Treba_Generate_Content_Plugin
         $parts = [];
 
         foreach ($content as $part) {
-            if (is_array($part) && isset($part['type'], $part['text'])) {
-                if (
-                    'text' === $part['type'] &&
-                    '' !== trim((string) $part['text'])
-                ) {
-                    $parts[] = (string) $part['text'];
+            if (is_string($part)) {
+                $part = trim($part);
+
+                if ('' !== $part) {
+                    $parts[] = $part;
                 }
-            } elseif (is_string($part) && '' !== trim($part)) {
-                $parts[] = $part;
+
+                continue;
+            }
+
+            if (!is_array($part)) {
+                continue;
+            }
+
+            // Найпоширеніший формат OpenRouter для Gemini: ['type' => 'text', 'text' => '...']
+            if (isset($part['text']) && '' !== trim((string) $part['text'])) {
+                $parts[] = (string) $part['text'];
+                continue;
+            }
+
+            // Деякі варіанти можуть мати 'content' або 'value' замість 'text'.
+            if (
+                isset($part['content']) &&
+                is_string($part['content']) &&
+                '' !== trim($part['content'])
+            ) {
+                $parts[] = trim($part['content']);
+                continue;
+            }
+
+            if (
+                isset($part['value']) &&
+                is_string($part['value']) &&
+                '' !== trim($part['value'])
+            ) {
+                $parts[] = trim($part['value']);
+                continue;
             }
         }
 
-        return trim(implode("\n", array_map('trim', $parts)));
+        return trim(implode("\n", $parts));
     }
 
     private function get_max_tokens_key($model, $use_openrouter)
