@@ -1814,6 +1814,9 @@ final class Treba_Generate_Content_Plugin
             $types = !empty($this->last_openrouter_content_types)
                 ? implode(', ', $this->last_openrouter_content_types)
                 : 'типів не знайдено';
+            $details_summary = $this->summarize_reasoning_details(
+                $first_choice['message']['reasoning_details'] ?? []
+            );
             $this->errors[] = sprintf(
                 '%s %s',
                 esc_html__(
@@ -1822,6 +1825,16 @@ final class Treba_Generate_Content_Plugin
                 ),
                 esc_html($types)
             );
+            if ('' !== $details_summary) {
+                $this->errors[] = sprintf(
+                    '%s %s',
+                    esc_html__(
+                        'OpenRouter reasoning_details (структура):',
+                        'treba-generate-content'
+                    ),
+                    esc_html($details_summary)
+                );
+            }
             return '';
         }
 
@@ -2037,6 +2050,45 @@ final class Treba_Generate_Content_Plugin
             : ['типів не знайдено'];
 
         return $result;
+    }
+
+    private function summarize_reasoning_details($details)
+    {
+        if (!is_array($details) || empty($details)) {
+            return '';
+        }
+
+        $types = [];
+        $keys = [];
+        $limit = 0;
+
+        foreach ($details as $detail) {
+            if (!is_array($detail)) {
+                continue;
+            }
+
+            if (isset($detail['type']) && is_string($detail['type'])) {
+                $types[strtolower($detail['type'])] = true;
+            }
+
+            foreach (array_keys($detail) as $key) {
+                $keys[$key] = true;
+            }
+
+            $limit++;
+            if ($limit >= 10) {
+                break;
+            }
+        }
+
+        $type_list = !empty($types)
+            ? implode(', ', array_keys($types))
+            : 'немає type';
+        $key_list = !empty($keys)
+            ? implode(', ', array_keys($keys))
+            : 'немає ключів';
+
+        return sprintf('types: %s; keys: %s', $type_list, $key_list);
     }
 
     /**
