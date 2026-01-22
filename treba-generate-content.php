@@ -19,7 +19,6 @@ final class Treba_Generate_Content_Plugin
   private $allowed_users_option = 'treba_gpt_allowed_users';
   private $api_key_option = 'treba_gpt_api_key';
   private $openrouter_api_key_option = 'treba_openrouter_api_key';
-  private $google_ai_api_key_option = 'treba_google_ai_api_key';
   private $default_model_option = 'treba_gpt_default_model';
   private $temperature_option = 'treba_gpt_temperature';
   private $notices = [];
@@ -30,7 +29,6 @@ final class Treba_Generate_Content_Plugin
   private $markdown_parser;
   private $cached_api_key = null;
   private $cached_openrouter_api_key = null;
-  private $cached_google_ai_api_key = null;
   private $encryption_key = null;
   private $models = [
     'gpt-4o-mini' => 'GPT-4o mini — Input: $0,15; Output: $0,60',
@@ -82,10 +80,8 @@ final class Treba_Generate_Content_Plugin
       'OpenRouter · Gemini 2.0 Flash 001 — Input: $0,1; Output: $0,4',
     'google/gemini-3-flash-preview' =>
       'OpenRouter · Gemini 3 Flash preview — Input: $0,5; Output: $3',
-    'googleai/gemini-3-pro-preview' =>
-      'Google AI Studio · Gemini 3 Pro preview — Input: $2; Output: $12',
     'google/gemini-3-pro-preview' =>
-      'OpenRouter · Gemini 3 Pro preview — Input: $2; Output: $12',
+      'Google: Gemini 3 Pro Preview',
     'deepseek/deepseek-v3.2' =>
       'OpenRouter · DeepSeek V3.2 — Input: $0,24; Output: $0,38',
     'deepseek/deepseek-chat-v3-0324' =>
@@ -922,7 +918,6 @@ final class Treba_Generate_Content_Plugin
     $allowed_users = (array) get_option($this->allowed_users_option, []);
     $has_openai_key = $this->has_api_key();
     $has_openrouter_key = $this->has_openrouter_api_key();
-    $has_google_ai_key = $this->has_google_ai_api_key();
     $users = get_users([
       'orderby' => 'display_name',
       'order' => 'ASC',
@@ -983,34 +978,6 @@ final class Treba_Generate_Content_Plugin
               <?php else: ?>
                 <p class="description"><?php esc_html_e(
                   'Введіть ключ OpenRouter один раз, він буде збережений у зашифрованому вигляді.',
-                  'treba-generate-content'
-                ); ?></p>
-              <?php endif; ?>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row"><label for="tgpt_google_ai_api_key"><?php esc_html_e(
-              'Google AI Studio API ключ',
-              'treba-generate-content'
-            ); ?></label></th>
-            <td>
-              <input id="tgpt_google_ai_api_key" class="regular-text" type="password" name="tgpt_google_ai_api_key" value=""
-                placeholder="AIza..." autocomplete="off">
-              <?php if ($has_google_ai_key): ?>
-                <p class="description"><?php esc_html_e(
-                  'Ключ Google AI Studio уже збережений. Залиште поле порожнім, щоб не змінювати.',
-                  'treba-generate-content'
-                ); ?></p>
-                <label>
-                  <input type="checkbox" name="tgpt_clear_google_ai_api_key" value="1">
-                  <?php esc_html_e(
-                    'Видалити збережений ключ Google AI Studio',
-                    'treba-generate-content'
-                  ); ?>
-                </label>
-              <?php else: ?>
-                <p class="description"><?php esc_html_e(
-                  'Введіть ключ Google AI Studio один раз, він буде збережений у зашифрованому вигляді.',
                   'treba-generate-content'
                 ); ?></p>
               <?php endif; ?>
@@ -1153,47 +1120,6 @@ final class Treba_Generate_Content_Plugin
       } else {
         $this->errors[] = esc_html__(
           'Не вдалося зашифрувати OpenRouter API-ключ. Переконайтеся, що на сервері доступне OpenSSL.',
-          'treba-generate-content'
-        );
-      }
-    }
-
-    $google_ai_key_input = isset($_POST['tgpt_google_ai_api_key'])
-      ? trim(
-        sanitize_text_field(
-          wp_unslash($_POST['tgpt_google_ai_api_key'])
-        )
-      )
-      : '';
-    $should_clear_google_ai_key = !empty(
-      $_POST['tgpt_clear_google_ai_api_key']
-    );
-
-    if ($should_clear_google_ai_key) {
-      delete_option($this->google_ai_api_key_option);
-      $this->cached_google_ai_api_key = null;
-      $this->notices[] = esc_html__(
-        'Збережений Google AI Studio API-ключ видалено.',
-        'treba-generate-content'
-      );
-    } elseif ('' !== $google_ai_key_input) {
-      $encrypted_google_ai_key = $this->encrypt_api_key(
-        $google_ai_key_input
-      );
-
-      if ($encrypted_google_ai_key) {
-        update_option(
-          $this->google_ai_api_key_option,
-          $encrypted_google_ai_key
-        );
-        $this->cached_google_ai_api_key = $google_ai_key_input;
-        $this->notices[] = esc_html__(
-          'Google AI Studio API-ключ оновлено.',
-          'treba-generate-content'
-        );
-      } else {
-        $this->errors[] = esc_html__(
-          'Не вдалося зашифрувати Google AI Studio API-ключ. Переконайтеся, що на сервері доступне OpenSSL.',
           'treba-generate-content'
         );
       }
@@ -1592,48 +1518,21 @@ final class Treba_Generate_Content_Plugin
       $language
     );
 
-    $provider = $this->get_provider_for_model($model);
-    $is_openrouter = 'openrouter' === $provider;
-    $api_key =
-      'openrouter' === $provider
+    $is_openrouter = $this->is_openrouter_model($model);
+    $api_key = $is_openrouter
       ? $this->get_saved_openrouter_api_key()
-      : ('googleai' === $provider
-        ? $this->get_saved_google_ai_api_key()
-        : $this->get_saved_api_key());
-    $api_key = trim((string) $api_key);
+      : $this->get_saved_api_key();
 
-    if ('' === $api_key) {
-      $this->errors[] =
-        'openrouter' === $provider
+    if (empty($api_key)) {
+      $this->errors[] = $is_openrouter
         ? esc_html__(
           'Ключ OpenRouter API не налаштований. Додайте його у вкладці «Налаштування».',
           'treba-generate-content'
         )
-        : ('googleai' === $provider
-          ? esc_html__(
-            'Ключ Google AI Studio API не налаштований. Додайте його у вкладці «Налаштування».',
-            'treba-generate-content'
-          )
-          : esc_html__(
-            'Ключ OpenAI API не налаштований. Додайте його у вкладці «Налаштування».',
-            'treba-generate-content'
-          ));
-      return;
-    }
-
-    if ('openrouter' === $provider && 0 !== strpos($api_key, 'sk-or-')) {
-      $this->errors[] = esc_html__(
-        'OpenRouter API ключ має починатися з "sk-or-". Перевірте ключ у вкладці «Налаштування».',
-        'treba-generate-content'
-      );
-      return;
-    }
-
-    if ('googleai' === $provider && 0 !== strpos($api_key, 'AIza')) {
-      $this->errors[] = esc_html__(
-        'Google AI Studio API ключ зазвичай починається з "AIza". Перевірте ключ у вкладці «Налаштування».',
-        'treba-generate-content'
-      );
+        : esc_html__(
+          'Ключ OpenAI API не налаштований. Додайте його у вкладці «Налаштування».',
+          'treba-generate-content'
+        );
       return;
     }
 
@@ -1656,40 +1555,17 @@ final class Treba_Generate_Content_Plugin
     }
     $max_tokens = $this->calculate_max_tokens($word_goal);
 
-    $content =
-      'googleai' === $provider
-      ? $this->request_google_ai(
-        $api_key,
-        $model,
-        $prompt,
-        $temperature,
-        $max_tokens
-      )
-      : $this->request_openai(
-        $api_key,
-        $model,
-        $prompt,
-        $is_openrouter,
-        $temperature,
-        $max_tokens
-      );
+    $content = $this->request_openai(
+      $api_key,
+      $model,
+      $prompt,
+      $is_openrouter,
+      $temperature,
+      $max_tokens
+    );
 
     if (empty($content)) {
       return;
-    }
-
-    if (
-      'google/gemini-3-pro-preview' === $model &&
-      !empty($this->last_openrouter_content_types)
-    ) {
-      $this->notices[] = sprintf(
-        '%s %s',
-        esc_html__(
-          'OpenRouter типи контенту:',
-          'treba-generate-content'
-        ),
-        esc_html(implode(', ', $this->last_openrouter_content_types))
-      );
     }
 
     $content = $this->convert_markdown_to_html($content);
@@ -1813,18 +1689,6 @@ final class Treba_Generate_Content_Plugin
       ],
     ];
 
-    // Для Gemini 3 Pro Preview просимо повертати лише фінальну відповідь.
-    if ($use_openrouter && 'google/gemini-3-pro-preview' === $model) {
-      $payload['messages'][0]['content'] .=
-        ' Respond only with the final answer. Do not include any reasoning or analysis.';
-      $payload['reasoning'] = [
-        'exclude' => true,
-      ];
-      $payload['response_format'] = [
-        'type' => 'text',
-      ];
-    }
-
     // Деякі моделі (наприклад, search-preview або GPT-5) не приймають temperature.
     if (
       'gpt-4o-mini-search-preview' !== $model &&
@@ -1866,10 +1730,9 @@ final class Treba_Generate_Content_Plugin
     if (is_wp_error($response)) {
       $this->errors[] = sprintf(
         '%s %s',
-        esc_html(
-          $use_openrouter
-          ? 'Помилка запиту до OpenRouter:'
-          : 'Помилка запиту до OpenAI:'
+        esc_html__(
+          'Помилка запиту до OpenAI:',
+          'treba-generate-content'
         ),
         esc_html($response->get_error_message())
       );
@@ -1885,307 +1748,26 @@ final class Treba_Generate_Content_Plugin
         esc_html__('Невідома помилка API.', 'treba-generate-content');
       $this->errors[] = sprintf(
         '%s %s',
-        esc_html(
-          $use_openrouter
-          ? 'OpenRouter повернув помилку:'
-          : 'OpenAI повернув помилку:'
+        esc_html__(
+          'OpenAI повернув помилку:',
+          'treba-generate-content'
         ),
         esc_html($message)
       );
       return '';
     }
 
-    $first_choice = $body['choices'][0] ?? [];
-    $content = $this->extract_choice_content($first_choice, $model);
+    $content = $body['choices'][0]['message']['content'] ?? '';
 
     if (empty($content)) {
-      $hint = '';
-
-      if (is_array($first_choice)) {
-        $top_keys = implode(', ', array_keys($first_choice));
-        $message = isset($first_choice['message'])
-          ? (is_array($first_choice['message'])
-            ? implode(', ', array_keys($first_choice['message']))
-            : 'message:scalar')
-          : 'message:missing';
-        $hint = sprintf(
-          ' (structure: choice keys [%s]; message keys [%s])',
-          $top_keys,
-          $message
-        );
-      }
-
-      $this->errors[] =
-        ($use_openrouter
-          ? esc_html__(
-            'OpenRouter не повернув контент',
-            'treba-generate-content'
-          )
-          : esc_html__(
-            'OpenAI не повернув контент',
-            'treba-generate-content'
-          )) . esc_html($hint);
-      return '';
-    }
-
-    return trim($content);
-  }
-
-  private function request_google_ai(
-    $api_key,
-    $model,
-    $prompt,
-    $temperature = 0.65,
-    $max_tokens = null
-  ) {
-    $model_name = $this->get_google_ai_model_name($model);
-    $url = sprintf(
-      'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s',
-      rawurlencode($model_name),
-      rawurlencode($api_key)
-    );
-
-    $payload = [
-      'systemInstruction' => [
-        'parts' => [
-          [
-            'text' =>
-              'You are a helpful assistant that writes well-structured long-form SEO articles.',
-          ],
-        ],
-      ],
-      'contents' => [
-        [
-          'role' => 'user',
-          'parts' => [
-            [
-              'text' => $prompt,
-            ],
-          ],
-        ],
-      ],
-      'generationConfig' => [
-        'responseMimeType' => 'text/plain',
-      ],
-    ];
-
-    if (null !== $temperature) {
-      $payload['generationConfig']['temperature'] = $temperature;
-    }
-
-    if (null !== $max_tokens) {
-      $max_tokens = (int) $max_tokens;
-      if ($max_tokens < 1024) {
-        $max_tokens = 1024;
-      } elseif ($max_tokens > 65536) {
-        $max_tokens = 65536;
-      }
-      $payload['generationConfig']['maxOutputTokens'] = $max_tokens;
-    } else {
-      // Якщо не вказано, ставимо високий ліміт для довгих статей
-      $payload['generationConfig']['maxOutputTokens'] = 65536;
-
-      // Для Gemini 3 Pro збільшуємо ліміт токенів та налаштовуємо рівень мислення
-      if ('gemini-3-pro-preview' === $model_name) {
-        $payload['generationConfig']['maxOutputTokens'] = 65536;
-        $payload['generationConfig']['thinkingConfig'] = [
-          'includeThoughts' => false,
-          'thinkingLevel' => 'low',
-        ];
-      }
-    }
-
-    $response = wp_remote_post($url, [
-      'headers' => [
-        'Content-Type' => 'application/json',
-      ],
-      'body' => wp_json_encode($payload),
-      'timeout' => 180,
-    ]);
-
-    if (is_wp_error($response)) {
-      $this->errors[] = sprintf(
-        '%s %s',
-        esc_html__(
-          'Помилка запиту до Google AI Studio:',
-          'treba-generate-content'
-        ),
-        esc_html($response->get_error_message())
-      );
-      return '';
-    }
-
-    $code = wp_remote_retrieve_response_code($response);
-    $body = json_decode(wp_remote_retrieve_body($response), true);
-
-    if (200 !== $code) {
-      $message =
-        $body['error']['message'] ??
-        esc_html__('Невідома помилка API.', 'treba-generate-content');
-      $this->errors[] = sprintf(
-        '%s %s',
-        esc_html__(
-          'Google AI Studio повернув помилку:',
-          'treba-generate-content'
-        ),
-        esc_html($message)
-      );
-      return '';
-    }
-
-    $candidates = $body['candidates'] ?? [];
-
-    if (empty($candidates)) {
-      $block_reason = $body['promptFeedback']['blockReason'] ?? '';
-      $safety = $this->summarize_google_ai_safety(
-        $body['promptFeedback']['safetyRatings'] ?? []
-      );
-      $message =
-        '' !== $block_reason
-        ? sprintf(
-          'Google AI Studio заблокував запит: %s.',
-          $block_reason
-        )
-        : 'Google AI Studio не повернув кандидати відповіді.';
-      if ('' !== $safety) {
-        $message .= ' Safety: ' . $safety;
-      }
-      $this->errors[] = esc_html($message);
-      return '';
-    }
-
-    $candidate = $candidates[0] ?? [];
-    $finish_reason = $candidate['finishReason'] ?? '';
-    $content = $this->extract_google_ai_text($candidate);
-
-    if ('' === $content) {
-      $safety = $this->summarize_google_ai_safety(
-        $candidate['safetyRatings'] ?? []
-      );
-      $message = 'Google AI Studio не повернув контент.';
-      if ('' !== $finish_reason) {
-        $message .= ' Finish reason: ' . $finish_reason . '.';
-      }
-      if ('' !== $safety) {
-        $message .= ' Safety: ' . $safety;
-      }
-      $this->errors[] = esc_html($message);
-      return '';
-    }
-
-    if ('MAX_TOKENS' === $finish_reason) {
       $this->errors[] = esc_html__(
-        'Google AI Studio обірвав відповідь через MAX_TOKENS. Спробуйте: 1) зменшити мінімальну кількість слів, 2) переконатись що thinking_budget достатній, 3) використати іншу модель.',
+        'OpenAI не повернув контент.',
         'treba-generate-content'
       );
       return '';
     }
 
     return trim($content);
-  }
-
-  private function extract_google_ai_text($candidate)
-  {
-    if (!is_array($candidate)) {
-      return '';
-    }
-
-    $content = $candidate['content'] ?? [];
-    $parts = is_array($content) ? $content['parts'] ?? [] : $content;
-
-    if (is_array($parts)) {
-      if (isset($parts['text']) && is_string($parts['text'])) {
-        return trim($parts['text']);
-      }
-
-      $text = $this->extract_text_from_parts($parts, ['text']);
-      if ('' !== $text) {
-        return $text;
-      }
-    } elseif (is_string($parts)) {
-      return trim($parts);
-    }
-
-    if (
-      is_array($content) &&
-      isset($content['text']) &&
-      is_string($content['text'])
-    ) {
-      return trim($content['text']);
-    }
-
-    if (isset($candidate['text']) && is_string($candidate['text'])) {
-      return trim($candidate['text']);
-    }
-
-    return $this->extract_text_from_allowed_keys($candidate, [
-      'text',
-      'output_text',
-      'outputText',
-      'content',
-      'response',
-      'result',
-    ]);
-  }
-
-  private function extract_text_from_allowed_keys($node, $allowed_keys)
-  {
-    if (is_string($node)) {
-      $trimmed = trim($node);
-      return '' === $trimmed ? '' : $trimmed;
-    }
-
-    if (!is_array($node)) {
-      return '';
-    }
-
-    foreach ($allowed_keys as $key) {
-      if (!array_key_exists($key, $node)) {
-        continue;
-      }
-      $text = $this->extract_text_from_allowed_keys(
-        $node[$key],
-        $allowed_keys
-      );
-      if ('' !== $text) {
-        return $text;
-      }
-    }
-
-    foreach ($node as $value) {
-      $text = $this->extract_text_from_allowed_keys(
-        $value,
-        $allowed_keys
-      );
-      if ('' !== $text) {
-        return $text;
-      }
-    }
-
-    return '';
-  }
-  private function summarize_google_ai_safety($ratings)
-  {
-    if (!is_array($ratings) || empty($ratings)) {
-      return '';
-    }
-
-    $items = [];
-
-    foreach ($ratings as $rating) {
-      if (!is_array($rating)) {
-        continue;
-      }
-
-      $category = $rating['category'] ?? '';
-      $probability = $rating['probability'] ?? '';
-
-      if ('' !== $category || '' !== $probability) {
-        $items[] = trim($category . ':' . $probability, ':');
-      }
-    }
-
-    return implode(', ', $items);
   }
 
   private function prepare_list_from_textarea($raw)
@@ -2250,207 +1832,6 @@ final class Treba_Generate_Content_Plugin
     return $estimated;
   }
 
-  /**
-   * OpenRouter деякі моделі (зокрема Gemini) віддають контент масивом частин.
-   * Агрегуємо їх у звичайний текст.
-   */
-  private function extract_choice_content($choice, $model = '')
-  {
-    if (is_string($choice)) {
-      return trim($choice);
-    }
-
-    if (!is_array($choice)) {
-      return '';
-    }
-
-    // Основна гілка: message->content
-    $message = $choice['message'] ?? [];
-    $content = is_array($message) ? $message['content'] ?? '' : $message;
-
-    if (
-      'google/gemini-3-pro-preview' === $model &&
-      is_string($content) &&
-      'google-gemini-v1' === trim($content)
-    ) {
-      return '';
-    }
-
-    if ('google/gemini-3-pro-preview' === $model && is_array($content)) {
-      $text = $this->extract_text_from_parts($content, [
-        'text',
-        'output_text',
-        'final',
-        'final_answer',
-        'answer',
-      ]);
-
-      if ('' !== $text) {
-        return $text;
-      }
-    }
-
-    $text = $this->extract_text_from_content($content);
-
-    if ('' !== $text) {
-      return $text;
-    }
-
-    if (is_array($message) && !empty($message['annotations'])) {
-      $text = $this->extract_text_from_content($message['annotations']);
-
-      if ('' !== $text) {
-        return $text;
-      }
-    }
-
-    // Деякі відповіді можуть мати content на верхньому рівні choice.
-    if (isset($choice['content'])) {
-      $fallback = $this->extract_text_from_content($choice['content']);
-
-      if ('' !== $fallback) {
-        return $fallback;
-      }
-    }
-
-    return '';
-  }
-
-  /**
-   * Нормалізує різні формати content: рядок, масив частин, вкладені об'єкти.
-   */
-  private function extract_text_from_content($content)
-  {
-    $parts = $this->flatten_content_to_strings($content);
-    return trim(implode("\n", $parts));
-  }
-
-  private function extract_text_from_parts($parts, $allowed_types)
-  {
-    $texts = [];
-
-    foreach ($parts as $part) {
-      if (!is_array($part)) {
-        if (is_string($part) && '' !== trim($part)) {
-          $texts[] = $part;
-        }
-        continue;
-      }
-
-      $type = isset($part['type'])
-        ? strtolower((string) $part['type'])
-        : '';
-
-      if ('' !== $type && !in_array($type, $allowed_types, true)) {
-        continue;
-      }
-
-      if (isset($part['text']) && is_string($part['text'])) {
-        $texts[] = $part['text'];
-        continue;
-      }
-
-      if (isset($part['content']) && is_string($part['content'])) {
-        $texts[] = $part['content'];
-        continue;
-      }
-    }
-
-    return trim(implode("\n", array_filter(array_map('trim', $texts))));
-  }
-
-  /**
-   * Рекурсивно збирає текстові частини з різних структур відповіді OpenRouter/Gemini.
-   *
-   * Підтримка:
-   * - прості рядки;
-   * - масиви рядків;
-   * - масиви частин з ключами text/content/value;
-   * - вкладені масиви у ключах content/parts/segments/output_text/annotations.
-   */
-  private function flatten_content_to_strings($node)
-  {
-    $result = [];
-
-    // Прості випадки
-    if (is_string($node)) {
-      $trimmed = trim($node);
-
-      if ('' !== $trimmed) {
-        $result[] = $trimmed;
-      }
-
-      return $result;
-    }
-
-    if (!is_array($node)) {
-      return $result;
-    }
-
-    // Якщо це блок reasoning/analysis/thought — ігноруємо
-    if (isset($node['type']) && is_string($node['type'])) {
-      $type = strtolower($node['type']);
-
-      if (
-        in_array(
-          $type,
-          ['reasoning', 'analysis', 'thought', 'internal_monologue'],
-          true
-        )
-      ) {
-        return $result;
-      }
-    }
-
-    // Якщо асоціативний масив із текстом прямо
-    $has_text = isset($node['text']) && is_string($node['text']);
-    $has_value = isset($node['value']) && is_string($node['value']);
-    $has_content_scalar =
-      isset($node['content']) && is_string($node['content']);
-
-    if ($has_text || $has_value || $has_content_scalar) {
-      $candidate = $has_text
-        ? $node['text']
-        : ($has_value
-          ? $node['value']
-          : $node['content']);
-      $candidate = trim($candidate);
-
-      if ('' !== $candidate) {
-        $result[] = $candidate;
-      }
-
-      return $result;
-    }
-
-    // Якщо асоціативний масив з вкладеним контентом
-    foreach (
-      ['content', 'parts', 'segments', 'output_text', 'annotations']
-      as $key
-    ) {
-      if (isset($node[$key])) {
-        $result = array_merge(
-          $result,
-          $this->flatten_content_to_strings($node[$key])
-        );
-      }
-    }
-
-    // Якщо це числовий масив — пройдемося по елементах
-    $is_list = array_keys($node) === range(0, count($node) - 1);
-
-    if ($is_list) {
-      foreach ($node as $item) {
-        $result = array_merge(
-          $result,
-          $this->flatten_content_to_strings($item)
-        );
-      }
-    }
-
-    return $result;
-  }
-
   private function get_max_tokens_key($model, $use_openrouter)
   {
     // Нові моделі GPT-5 на OpenAI вимагають max_completion_tokens.
@@ -2467,33 +1848,9 @@ final class Treba_Generate_Content_Plugin
     return 0 === strpos($model, 'gpt-5');
   }
 
-  private function is_google_ai_model($model)
-  {
-    return 0 === strpos((string) $model, 'googleai/');
-  }
-
-  private function get_google_ai_model_name($model)
-  {
-    return ltrim(substr((string) $model, strlen('googleai/')), '/');
-  }
-
-  private function get_provider_for_model($model)
-  {
-    if ($this->is_google_ai_model($model)) {
-      return 'googleai';
-    }
-
-    if ($this->is_openrouter_model($model)) {
-      return 'openrouter';
-    }
-
-    return 'openai';
-  }
-
   private function is_openrouter_model($model)
   {
-    return false !== strpos((string) $model, '/') &&
-      !$this->is_google_ai_model($model);
+    return false !== strpos((string) $model, '/');
   }
 
   private function convert_markdown_to_html($markdown)
@@ -2570,27 +1927,6 @@ final class Treba_Generate_Content_Plugin
     return $this->cached_openrouter_api_key;
   }
 
-  private function get_saved_google_ai_api_key()
-  {
-    if (null !== $this->cached_google_ai_api_key) {
-      return $this->cached_google_ai_api_key;
-    }
-
-    $stored = get_option($this->google_ai_api_key_option, '');
-
-    if ('' === $stored) {
-      $this->cached_google_ai_api_key = '';
-      return '';
-    }
-
-    $decrypted = $this->decrypt_api_key($stored);
-    $this->cached_google_ai_api_key = is_string($decrypted)
-      ? $decrypted
-      : '';
-
-    return $this->cached_google_ai_api_key;
-  }
-
   private function has_api_key()
   {
     return '' !== $this->get_saved_api_key();
@@ -2601,16 +1937,9 @@ final class Treba_Generate_Content_Plugin
     return '' !== $this->get_saved_openrouter_api_key();
   }
 
-  private function has_google_ai_api_key()
-  {
-    return '' !== $this->get_saved_google_ai_api_key();
-  }
-
   private function has_any_api_key()
   {
-    return $this->has_api_key() ||
-      $this->has_openrouter_api_key() ||
-      $this->has_google_ai_api_key();
+    return $this->has_api_key() || $this->has_openrouter_api_key();
   }
 
   private function encrypt_api_key($api_key)
