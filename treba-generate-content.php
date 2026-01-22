@@ -89,7 +89,7 @@ final class Treba_Generate_Content_Plugin
     'kwaipilot/kat-coder-pro:free' =>
       'OpenRouter · KAT Coder Pro (free) — Input: $0; Output: $0',
     'complex_mode_mixed' =>
-      '⚡ Complex Mode (Gemini 3 Pro/Flash + Grok 4 + Synthesis) — 3-5 mins',
+      '⚡ Complex Mode (Draft -> Critique -> Refine) — 3-5 mins',
   ];
 
   public function __construct()
@@ -1796,77 +1796,77 @@ final class Treba_Generate_Content_Plugin
     $max_tokens
   ) {
     // Етап 0: Отримуємо правильний ключ для OpenRouter
-    // Оскільки complex_mode_mixed не має слешу, handle_post_generation передає сюди OpenAI ключ,
-    // але наші воркери працюють через OpenRouter.
     $openrouter_key = $this->get_saved_openrouter_api_key();
 
     if (empty($openrouter_key)) {
-      $this->errors[] = esc_html__('OpenRouter ключ не знайдено. Будь ласка, додайте його в налаштуваннях.', 'treba-generate-content');
+      $this->errors[] = esc_html__('OpenRouter ключ не знайдено.', 'treba-generate-content');
       return '';
     }
 
-    // Збільшуємо час виконання, бо це займе багато часу
     if (function_exists('set_time_limit')) {
       set_time_limit(600);
     }
 
-    $workers = [
-      'google/gemini-3-pro-preview',
-      'google/gemini-3-flash-preview',
-      'x-ai/grok-4-fast',
-    ];
-    $drafts = [];
+    $model_name = 'google/gemini-3-pro-preview';
 
-    // Етап 1: Отримання чернеток від worker-моделей
-    foreach ($workers as $index => $worker_model) {
-      $draft = $this->request_openai(
-        $openrouter_key,
-        $worker_model,
-        $prompt,
-        true, // force use_openrouter for workers
-        $temperature,
-        $max_tokens
-      );
-
-      if (!empty($draft)) {
-        $drafts[] =
-          "### DRAFT " . ($index + 1) . " (Model: $worker_model):\n" . $draft;
-      }
-    }
-
-    if (empty($drafts)) {
-      $this->errors[] = esc_html__(
-        'Всі моделі-працівники не повернули результат.',
-        'treba-generate-content'
-      );
-      return '';
-    }
-
-    // Етап 2: Синтез
-    $synthesis_model = 'google/gemini-3-pro-preview';
-    $drafts_text = implode("\n\n================================\n\n", $drafts);
-
-    $synthesis_prompt =
-      "You are an expert editor and content synthesizer. I have provided 3 drafts of an article written by different AI models based on the following task:\n\n" .
-      "Original Task: \"$prompt\"\n\n" .
-      "Here are the drafts:\n\n$drafts_text\n\n" .
-      "YOUR GOAL: Analyze these drafts. Select the best insights, structure, and writing style from each. Combine them into a SINGLE, high-quality, cohesive, and comprehensive SEO-optimized article. " .
-      "Do not output the drafts separately. Write only the final merged article. Use markdown formatting (H1, H2, H3, lists).";
-
-    $final_content = $this->request_openai(
+    // ЕТАП 1: ЧЕРНЕТКА (Draft)
+    $draft_content = $this->request_openai(
       $openrouter_key,
-      $synthesis_model,
-      $synthesis_prompt,
-      true, // use OpenRouter
+      $model_name,
+      $prompt, // Original user task
+      true,    // force OpenRouter
       $temperature,
       $max_tokens
     );
 
-    // Якщо синтез не вдався, спробуємо повернути хоча б першу чернетку
-    if (empty($final_content) && !empty($drafts[0])) {
-      $this->errors[] = esc_html__('Синтез не вдався, повертаю першу чернетку.', 'treba-generate-content');
-      // Вирізаємо заголовок DRAFT 1...
-      return preg_replace('/^### DRAFT 1.*:\s*/s', '', $drafts[0]);
+    if (empty($draft_content)) {
+      $this->errors[] = esc_html__('Етап 1 (Чернетка) не повернув результат.', 'treba-generate-content');
+      return '';
+    }
+
+    // ЕТАП 2: КРИТИКА (Critique)
+    $critique_prompt =
+      "Ти професійний і дотошний фактчекер та редактор з багаторічним стажем. " .
+      "Твоя задача перевірити статтю на фактичні помилки і скласти список помилок та рекомендацій для автора, щоб він знав що виправляти.\n\n" .
+      "Ось стаття:\n" .
+      $draft_content;
+
+    $critique_content = $this->request_openai(
+      $openrouter_key,
+      $model_name,
+      $critique_prompt,
+      true,
+      $temperature,
+      $max_tokens
+    );
+
+    if (empty($critique_content)) {
+      // Якщо критика не вдалася, повертаємо хоча б чернетку
+      $this->notices[] = esc_html__('Етап 2 (Критика) не вдався, збережено чернетку.', 'treba-generate-content');
+      return $draft_content;
+    }
+
+    // ЕТАП 3: РЕДАГУВАННЯ (Refine)
+    $refine_prompt =
+      "Є стаття і редактор склав список помилок та рекомендацій. " .
+      "Внеси ці правки, щоб стаття виглядала ідеально і було без фактологічних помилок, щоб не було нічого вигаданого і написано того, чого немає насправді.\n\n" .
+      "Оригінальна стаття:\n" . $draft_content . "\n\n" .
+      "Список помилок та рекомендацій:\n" . $critique_content . "\n\n" .
+      "Твоя задача: Написати повну, виправлену фінальну версію статті (без коментарів, тільки стаття).";
+
+    $final_content = $this->request_openai(
+      $openrouter_key,
+      $model_name,
+      $refine_prompt,
+      true,
+      $temperature,
+      $max_tokens
+    );
+
+    if (empty($final_content)) {
+      // Якщо фіналізація не вдалася, повертаємо чернетку (бо критика - це просто список помилок)
+      $this->notices[] = esc_html__('Етап 3 (Редагування) не вдався, збережено початкову чернетку.', 'treba-generate-content');
+      return $draft_content;
     }
 
     return $final_content;
