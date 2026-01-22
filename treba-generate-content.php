@@ -1699,6 +1699,12 @@ final class Treba_Generate_Content_Plugin
     }
 
     if (null !== $max_tokens) {
+      // Для Gemini 3 Pro через OpenRouter примусово ставимо високий ліміт та вимикаємо вивід думок
+      if ('google/gemini-3-pro-preview' === $model) {
+        $max_tokens = 65536;
+        $payload['include_reasoning'] = false;
+      }
+
       $max_tokens_key = $this->get_max_tokens_key(
         $model,
         $use_openrouter
