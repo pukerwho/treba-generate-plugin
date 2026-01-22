@@ -88,6 +88,8 @@ final class Treba_Generate_Content_Plugin
       'OpenRouter · DeepSeek Chat V3 0324 — Input: $0,2; Output: $0,8',
     'kwaipilot/kat-coder-pro:free' =>
       'OpenRouter · KAT Coder Pro (free) — Input: $0; Output: $0',
+    'complex_mode_mixed' =>
+      '⚡ Complex Mode (Gemini 3 Pro/Flash + Grok 4 + Synthesis) — 3-5 mins',
   ];
 
   public function __construct()
@@ -1555,14 +1557,24 @@ final class Treba_Generate_Content_Plugin
     }
     $max_tokens = $this->calculate_max_tokens($word_goal);
 
-    $content = $this->request_openai(
-      $api_key,
-      $model,
-      $prompt,
-      $is_openrouter,
-      $temperature,
-      $max_tokens
-    );
+    if ('complex_mode_mixed' === $model) {
+      $content = $this->handle_complex_generation(
+        $api_key,
+        $prompt,
+        $is_openrouter,
+        $temperature,
+        $max_tokens
+      );
+    } else {
+      $content = $this->request_openai(
+        $api_key,
+        $model,
+        $prompt,
+        $is_openrouter,
+        $temperature,
+        $max_tokens
+      );
+    }
 
     if (empty($content)) {
       return;
@@ -1771,9 +1783,81 @@ final class Treba_Generate_Content_Plugin
         'treba-generate-content'
       );
       return '';
+    return trim($content);
+  }
+
+  private function handle_complex_generation(
+    $api_key,
+    $prompt,
+    $is_openrouter,
+    $temperature,
+    $max_tokens
+  ) {
+    // Збільшуємо час виконання, бо це займе багато часу
+    if (function_exists('set_time_limit')) {
+      set_time_limit(600);
     }
 
-    return trim($content);
+    $workers = [
+      'google/gemini-3-pro-preview',
+      'google/gemini-3-flash-preview',
+      'x-ai/grok-4-fast',
+    ];
+    $drafts = [];
+
+    // Етап 1: Отримання чернеток від worker-моделей
+    foreach ($workers as $index => $worker_model) {
+      $draft = $this->request_openai(
+        $api_key,
+        $worker_model,
+        $prompt,
+        true, // force use_openrouter for workers
+        $temperature,
+        $max_tokens
+      );
+
+      if (!empty($draft)) {
+        $drafts[] =
+          "### DRAFT " . ($index + 1) . " (Model: $worker_model):\n" . $draft;
+      }
+    }
+
+    if (empty($drafts)) {
+      $this->errors[] = esc_html__(
+        'Всі моделі-працівники не повернули результат.',
+        'treba-generate-content'
+      );
+      return '';
+    }
+
+    // Етап 2: Синтез
+    $synthesis_model = 'google/gemini-3-pro-preview';
+    $drafts_text = implode("\n\n================================\n\n", $drafts);
+
+    $synthesis_prompt =
+      "You are an expert editor and content synthesizer. I have provided 3 drafts of an article written by different AI models based on the following task:\n\n" .
+      "Original Task: \"$prompt\"\n\n" .
+      "Here are the drafts:\n\n$drafts_text\n\n" .
+      "YOUR GOAL: Analyze these drafts. Select the best insights, structure, and writing style from each. Combine them into a SINGLE, high-quality, cohesive, and comprehensive SEO-optimized article. " .
+      "Do not output the drafts separately. Write only the final merged article. Use markdown formatting (H1, H2, H3, lists).";
+
+    $final_content = $this->request_openai(
+      $api_key,
+      $synthesis_model,
+      $synthesis_prompt,
+      true, // use OpenRouter
+      $temperature,
+      $max_tokens
+    );
+    
+    // Якщо синтез не вдався, спробуємо повернути хоча б першу чернетку
+    if (empty($final_content) && !empty($drafts[0])) {
+         $this->errors[] = esc_html__('Синтез не вдався, повертаю першу чернетку.', 'treba-generate-content');
+         // Вирізаємо заголовок DRAFT 1...
+         return preg_replace('/^### DRAFT 1.*:\s*/s', '', $drafts[0]);
+    }
+
+    return $final_content;
   }
 
   private function prepare_list_from_textarea($raw)
