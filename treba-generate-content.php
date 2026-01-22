@@ -1714,7 +1714,7 @@ final class Treba_Generate_Content_Plugin
       // Для Gemini 3 Pro через OpenRouter примусово ставимо високий ліміт та вимикаємо вивід думок
       if ('google/gemini-3-pro-preview' === $model) {
         $max_tokens = 65536;
-        $payload['include_reasoning'] = false;
+        // $payload['include_reasoning'] = false; // Вимикаємо, щоб перевірити чи це не блокує контент
       }
 
       $max_tokens_key = $this->get_max_tokens_key(
@@ -1778,9 +1778,10 @@ final class Treba_Generate_Content_Plugin
     $content = $body['choices'][0]['message']['content'] ?? '';
 
     if (empty($content)) {
-      $this->errors[] = esc_html__(
-        'OpenAI не повернув контент.',
-        'treba-generate-content'
+      $finish_reason = $body['choices'][0]['finish_reason'] ?? 'unknown';
+      $this->errors[] = sprintf(
+        esc_html__('OpenAI не повернув контент. Finish reason: %s', 'treba-generate-content'),
+        $finish_reason
       );
       return '';
     }
