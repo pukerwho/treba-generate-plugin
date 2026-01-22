@@ -1795,6 +1795,16 @@ final class Treba_Generate_Content_Plugin
     $temperature,
     $max_tokens
   ) {
+    // Етап 0: Отримуємо правильний ключ для OpenRouter
+    // Оскільки complex_mode_mixed не має слешу, handle_post_generation передає сюди OpenAI ключ,
+    // але наші воркери працюють через OpenRouter.
+    $openrouter_key = $this->get_saved_openrouter_api_key();
+
+    if (empty($openrouter_key)) {
+      $this->errors[] = esc_html__('OpenRouter ключ не знайдено. Будь ласка, додайте його в налаштуваннях.', 'treba-generate-content');
+      return '';
+    }
+
     // Збільшуємо час виконання, бо це займе багато часу
     if (function_exists('set_time_limit')) {
       set_time_limit(600);
@@ -1810,7 +1820,7 @@ final class Treba_Generate_Content_Plugin
     // Етап 1: Отримання чернеток від worker-моделей
     foreach ($workers as $index => $worker_model) {
       $draft = $this->request_openai(
-        $api_key,
+        $openrouter_key,
         $worker_model,
         $prompt,
         true, // force use_openrouter for workers
@@ -1844,7 +1854,7 @@ final class Treba_Generate_Content_Plugin
       "Do not output the drafts separately. Write only the final merged article. Use markdown formatting (H1, H2, H3, lists).";
 
     $final_content = $this->request_openai(
-      $api_key,
+      $openrouter_key,
       $synthesis_model,
       $synthesis_prompt,
       true, // use OpenRouter
