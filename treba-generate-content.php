@@ -1783,6 +1783,8 @@ final class Treba_Generate_Content_Plugin
         'treba-generate-content'
       );
       return '';
+    }
+
     return trim($content);
   }
 
@@ -1849,12 +1851,12 @@ final class Treba_Generate_Content_Plugin
       $temperature,
       $max_tokens
     );
-    
+
     // Якщо синтез не вдався, спробуємо повернути хоча б першу чернетку
     if (empty($final_content) && !empty($drafts[0])) {
-         $this->errors[] = esc_html__('Синтез не вдався, повертаю першу чернетку.', 'treba-generate-content');
-         // Вирізаємо заголовок DRAFT 1...
-         return preg_replace('/^### DRAFT 1.*:\s*/s', '', $drafts[0]);
+      $this->errors[] = esc_html__('Синтез не вдався, повертаю першу чернетку.', 'treba-generate-content');
+      // Вирізаємо заголовок DRAFT 1...
+      return preg_replace('/^### DRAFT 1.*:\s*/s', '', $drafts[0]);
     }
 
     return $final_content;
